@@ -1,0 +1,33 @@
+# Proprietary inputs, generated APKs, decoded application code, and local tools.
+*.apk
+*.apkm
+*.xapk
+*.jar
+*.hasm
+*.idsig
+/patched/
+/signed*/
+/.work/
+/dist/
+/tools/
+/.venv/
+/current-*
+/current-ui.xml
+/index.android.hasm
+/patch_seek_race.py
+/patch_details_rows.py
+
+# Signing credentials and local configuration must never be published.
+*.keystore
+*.jks
+*.p12
+*.pfx
+.env
+.env.*
+SIGNING.txt
+secrets/
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
