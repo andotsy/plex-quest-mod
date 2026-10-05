@@ -21,11 +21,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
@@ -49,7 +49,7 @@ jobs:
         run: python scripts/sign_apks.py --directory dist/unsigned --output dist/signed
       - name: Upload unsigned standalone APK and report
         if: ${{ !inputs.sign_apks }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: plex-quest-unsigned-${{ github.run_number }}
           path: |
@@ -59,7 +59,7 @@ jobs:
           retention-days: 7
       - name: Upload signed standalone APK and report
         if: ${{ inputs.sign_apks }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: plex-quest-signed-${{ github.run_number }}
           path: |
