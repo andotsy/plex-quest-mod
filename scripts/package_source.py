@@ -14,7 +14,7 @@ def main():
     parser.add_argument("--out", type=Path, default=ROOT / "dist/plex-quest-patch-source.zip")
     args = parser.parse_args()
     files = [ROOT / name for name in (".gitignore", "LICENSE", "README.md", "requirements.txt")]
-    extensions = {".py", ".smali", ".yml"}
+    extensions = {".py", ".java", ".smali", ".yml"}
     for directory in (".github", "patches", "scripts", "src", "tests"):
         files.extend(path for path in (ROOT / directory).rglob("*")
                      if path.is_file() and not path.is_symlink() and path.suffix in extensions)

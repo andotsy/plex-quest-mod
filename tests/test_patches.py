@@ -9,12 +9,26 @@ from pathlib import Path
 from zipfile import ZipFile
 from unittest.mock import patch
 
-from plex_quest.build import download, package_apks, sign
+from plex_quest.build import download, package_apks, require_native_libraries, sign, verify_standalone
 from plex_quest.hermes import patch_bundle
-from plex_quest.smali import TEMPLATE, get_method, inject_navigation_handler, patch_activity, patch_application, patch_key_mapping
+from plex_quest.smali import TEMPLATE, get_method, inject_navigation_handler, patch_activity, patch_application, patch_application_id, patch_key_mapping
 
 
 class NativePatchTests(unittest.TestCase):
+    def test_package_identity_changes_without_renaming_native_classes(self):
+        original = (
+            '.class public final Ltv/plex/app/BuildConfig;\n'
+            '.field public static final APPLICATION_ID:Ljava/lang/String; = "com.plexapp.android"\n'
+            '.field public static final FLAVOR:Ljava/lang/String; = "play"\n'
+        )
+        patched = patch_application_id(original)
+        self.assertIn('APPLICATION_ID:Ljava/lang/String; = "com.plexapp.android.tv"', patched)
+        self.assertIn('.class public final Ltv/plex/app/BuildConfig;', patched)
+        self.assertIn('FLAVOR:Ljava/lang/String; = "play"', patched)
+        self.assertEqual(patch_application_id(patched), patched)
+        with self.assertRaises(ValueError):
+            patch_application_id(original.replace('com.plexapp.android', 'unrelated.application'))
+
     def test_stock_startup_patch_is_complete_and_idempotent(self):
         text = (
             ".class public final Ltv/plex/app/MainApplication;\n"
@@ -136,6 +150,22 @@ class InputArchiveTests(unittest.TestCase):
             self.assertEqual(base.read_bytes(), source.read_bytes())
             self.assertEqual(splits, [])
 
+    def test_incomplete_split_base_is_rejected_before_a_standalone_build(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory) / "base.apk"
+            base.write_bytes(self.apk_bytes(base=True))
+            with self.assertRaisesRegex(ValueError, "base.apk alone is incomplete"):
+                require_native_libraries([base])
+
+    def test_armv7_split_does_not_satisfy_quest_native_requirements(self):
+        with tempfile.TemporaryDirectory() as directory:
+            wrong_abi = Path(directory) / "wrong-abi.apk"
+            with ZipFile(wrong_abi, "w") as archive:
+                for library in ("libhermesvm.so", "libreactnative.so", "libPlexVideo.so"):
+                    archive.writestr("lib/armeabi-v7a/" + library, b"wrong architecture")
+            with self.assertRaisesRegex(ValueError, "ARM64"):
+                require_native_libraries([wrong_abi])
+
     def test_non_http_download_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "download"
@@ -216,6 +246,18 @@ class HermesIntegrationTests(unittest.TestCase):
         self.assertTrue(changed.issubset(allowed))
         self.assertEqual(sha1(patched[:-20]).digest(), patched[-20:])
         self.assertEqual(patch_bundle(patched), patched)
+
+
+@unittest.skipUnless(os.environ.get("PLEX_TEST_MERGED_APK") and os.environ.get("PLEX_TEST_RENAMED_APK"),
+                     "Merged/renamed APK fixtures are optional and are never committed")
+class StandaloneIntegrationTests(unittest.TestCase):
+    def test_actual_package_rename_preserves_resources_and_executable_payload(self):
+        merged = Path(os.environ["PLEX_TEST_MERGED_APK"])
+        renamed = Path(os.environ["PLEX_TEST_RENAMED_APK"])
+        report = verify_standalone([merged], merged, renamed)
+        self.assertEqual(report["dex_files"], 4)
+        self.assertGreater(report["native_libraries"], 0)
+        self.assertTrue(report["resource_ids_values_and_configurations_preserved_on_rename"])
 
 
 if __name__ == "__main__":

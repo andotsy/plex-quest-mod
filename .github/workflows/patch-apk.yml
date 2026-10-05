@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       apk_url:
-        description: Direct URL to your Plex 2026.17.0 APK, APKM, or XAPK
+        description: Direct URL to a complete Plex 2026.17.0 APKM/XAPK or universal APK (must include ARM64 libraries)
         required: true
         type: string
       sign_apks:
-        description: Sign the complete APK set using repository signing secrets
+        description: Sign the standalone APK for installation using repository secrets
         required: true
-        default: false
+        default: true
         type: boolean
 
 permissions:
@@ -39,7 +39,7 @@ jobs:
         env:
           APK_URL: ${{ inputs.apk_url }}
         run: python scripts/patch_apk.py --url "$APK_URL" --out dist
-      - name: Sign APK install set
+      - name: Sign standalone APK
         if: ${{ inputs.sign_apks }}
         env:
           APK_KEYSTORE_BASE64: ${{ secrets.APK_KEYSTORE_BASE64 }}
@@ -47,7 +47,7 @@ jobs:
           APK_STORE_PASSWORD: ${{ secrets.APK_STORE_PASSWORD }}
           APK_KEY_PASSWORD: ${{ secrets.APK_KEY_PASSWORD }}
         run: python scripts/sign_apks.py --directory dist/unsigned --output dist/signed
-      - name: Upload unsigned APKs and report
+      - name: Upload unsigned standalone APK and report
         if: ${{ !inputs.sign_apks }}
         uses: actions/upload-artifact@v4
         with:
@@ -57,7 +57,7 @@ jobs:
             dist/patch-report.json
           if-no-files-found: error
           retention-days: 7
-      - name: Upload signed install set and report
+      - name: Upload signed standalone APK and report
         if: ${{ inputs.sign_apks }}
         uses: actions/upload-artifact@v4
         with:

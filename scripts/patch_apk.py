@@ -15,12 +15,16 @@ def main():
     source.add_argument("--url", help="Direct download URL to APK, APKM, or XAPK")
     parser.add_argument("--out", type=Path, default=ROOT / "dist")
     parser.add_argument("--apktool", type=Path, help="Apktool 3.0.3 JAR; downloaded/verified if omitted")
+    parser.add_argument("--editor", type=Path, help="APKEditor 1.4.9 JAR; downloaded/verified if omitted")
+    parser.add_argument("--split", type=Path, action="append", default=[],
+                        help="Matching configuration APK to include; repeat for each split when input is base-only")
     parser.add_argument("--docker", action="store_true", help="Use Docker's Java runtime instead of local Java")
     args = parser.parse_args()
     source_path = args.input
     if args.url:
         source_path = download(args.url, ROOT / ".work/downloaded-package.zip")
-    build(source_path, args.out, tool("apktool", args.apktool), args.docker)
+    build(source_path, args.out, tool("apktool", args.apktool), args.docker,
+          editor=tool("editor", args.editor), extra_splits=args.split)
 
 
 if __name__ == "__main__":

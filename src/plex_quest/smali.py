@@ -1,6 +1,8 @@
 import re
 from pathlib import Path
 
+from . import ORIGINAL_PACKAGE, QUEST_PACKAGE
+
 
 TEMPLATE = Path(__file__).resolve().parents[2] / "patches/quest-input.smali"
 METHOD = re.compile(r"^\.method[^\n]*\n.*?^\.end method[ \t]*$", re.M | re.S)
@@ -125,12 +127,21 @@ def patch_key_mapping(text: str) -> str:
     return set_method(text, descriptor, method)
 
 
+def patch_application_id(text: str) -> str:
+    field = re.compile(r'(\.field public static final APPLICATION_ID:Ljava/lang/String; = )"([^"]+)"')
+    matches = list(field.finditer(text))
+    if len(matches) != 1 or matches[0][2] not in (ORIGINAL_PACKAGE, QUEST_PACKAGE):
+        raise ValueError("Unsupported BuildConfig application ID.")
+    return field.sub(lambda match: match[1] + '"' + QUEST_PACKAGE + '"', text)
+
+
 def patch_smali(tree: Path) -> None:
     activity = find_class(tree, "Ltv/plex/app/MainActivity;")
     app = find_class(tree, "Ltv/plex/app/MainApplication;")
     info = find_class(tree, "Lcom/facebook/react/modules/systeminfo/AndroidInfoModule;")
     keys = find_class(tree, "LTf/a;")
     views = find_class(tree, "Lcom/facebook/react/views/view/ReactViewGroup;")
+    config = find_class(tree, "Ltv/plex/app/BuildConfig;")
     view_text = views.read_text()
     for direction in ("Up", "Down", "Left", "Right"):
         if f".field private trapFocus{direction}:Z" not in view_text:
@@ -145,6 +156,7 @@ def patch_smali(tree: Path) -> None:
     activity_text = inject_navigation_handler(activity_text, "dispatchKeyEvent(Landroid/view/KeyEvent;)Z",
                                               "questHandleNavigationBack")
     changes = {
+        config: patch_application_id(config.read_text()),
         activity: activity_text,
         app: patch_application(app.read_text()),
         info: set_method(info.read_text(), "uiMode()Ljava/lang/String;",
