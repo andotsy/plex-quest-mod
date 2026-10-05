@@ -127,6 +127,35 @@ def patch_key_mapping(text: str) -> str:
     return set_method(text, descriptor, method)
 
 
+def patch_seek_event(text: str) -> str:
+    descriptor = "emitOnKeyEvent(Landroid/view/KeyEvent;)V"
+    method = get_method(text, descriptor)
+    if "->questSeekStepForHold(J)I" in method:
+        return text
+    if ".locals 3" not in method:
+        raise ValueError("Unsupported native key-event register layout.")
+    anchor = "invoke-virtual {p1}, Landroid/view/KeyEvent;->getAction()I"
+    if method.count(anchor) != 1 or "Arguments;->createMap()" not in method:
+        raise ValueError("Missing native key-event payload anchors.")
+    method = method.replace(".locals 3", ".locals 7", 1)
+    # Each KeyEvent carries its original down-time, so queued JS events receive
+    # the tier for that event rather than a later mutable global tier.
+    insertion = (
+        "invoke-virtual {p1}, Landroid/view/KeyEvent;->getEventTime()J\n"
+        "    move-result-wide v3\n"
+        "    invoke-virtual {p1}, Landroid/view/KeyEvent;->getDownTime()J\n"
+        "    move-result-wide v5\n"
+        "    sub-long/2addr v3, v5\n"
+        "    invoke-static {v3, v4}, Ltv/plex/app/MainActivity;->questSeekStepForHold(J)I\n"
+        "    move-result v2\n"
+        "    const-string v1, \"forwardTimeMs\"\n"
+        "    invoke-interface {v0, v1, v2}, Lcom/facebook/react/bridge/WritableMap;->putInt(Ljava/lang/String;I)V\n\n"
+        "    "
+    )
+    method = method.replace(anchor, insertion + anchor, 1)
+    return set_method(text, descriptor, method)
+
+
 def patch_application_id(text: str) -> str:
     field = re.compile(r'(\.field public static final APPLICATION_ID:Ljava/lang/String; = )"([^"]+)"')
     matches = list(field.finditer(text))
@@ -142,6 +171,7 @@ def patch_smali(tree: Path) -> None:
     keys = find_class(tree, "LTf/a;")
     views = find_class(tree, "Lcom/facebook/react/views/view/ReactViewGroup;")
     config = find_class(tree, "Ltv/plex/app/BuildConfig;")
+    key_events = find_class(tree, "Ltv/plex/video/KeyHandler;")
     view_text = views.read_text()
     for direction in ("Up", "Down", "Left", "Right"):
         if f".field private trapFocus{direction}:Z" not in view_text:
@@ -156,6 +186,7 @@ def patch_smali(tree: Path) -> None:
     activity_text = inject_navigation_handler(activity_text, "dispatchKeyEvent(Landroid/view/KeyEvent;)Z",
                                               "questHandleNavigationBack")
     changes = {
+        key_events: patch_seek_event(key_events.read_text()),
         config: patch_application_id(config.read_text()),
         activity: activity_text,
         app: patch_application(app.read_text()),

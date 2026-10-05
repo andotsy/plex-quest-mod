@@ -3,9 +3,30 @@
 
 .field private static questLastScrollEvent:J
 .field private static questLastSeekEvent:J
+.field private static questGestureStartedAt:J
 .field private static questSeekDirection:I
 .field private static questTouchOnControl:Z
+.field private static questTouchOnSeekbar:Z
 .field private static questSuppressVerticalRepeat:Z
+
+.method public static questSeekStepForHold(J)I
+    .locals 3
+
+    const-wide/16 v0, 0x7d0
+    cmp-long v2, p0, v0
+    if-ltz v2, :small
+    const-wide/16 v0, 0x1388
+    cmp-long v2, p0, v0
+    if-ltz v2, :medium
+    const v0, 0xea60
+    return v0
+    :medium
+    const/16 v0, 0x7530
+    return v0
+    :small
+    const/16 v0, 0x2710
+    return v0
+.end method
 
 .method private final questFindDeckView(Landroid/view/View;)Landroid/view/View;
     .locals 4
@@ -447,19 +468,8 @@
     if-eqz v12, :horizontal_interval
     const/16 v6, 0x15
     :horizontal_interval
-    const v0, 0x3e4ccccd
-    cmpg-float v11, v2, v0
-    if-ltz v11, :fast
-    const v0, 0x3da3d70a
-    cmpg-float v11, v2, v0
-    if-ltz v11, :medium
-    const-wide/16 v7, 0x258
-    goto :timing
-    :medium
-    const-wide/16 v7, 0x12c
-    goto :timing
-    :fast
-    const-wide/16 v7, 0x96
+    # Repeat at a stable cadence; jump distance grows with elapsed hold time.
+    const-wide/16 v7, 0x1f4
 
     :timing
     invoke-virtual {p1}, Landroid/view/MotionEvent;->getEventTime()J
@@ -486,6 +496,7 @@
     goto :emit
 
     :new_gesture
+    sput-wide v9, Ltv/plex/app/MainActivity;->questGestureStartedAt:J
     const/4 v0, 0x0
     sput-boolean v0, Ltv/plex/app/MainActivity;->questSuppressVerticalRepeat:Z
     const/4 v0, -0x2
@@ -517,12 +528,15 @@
     sput v5, Ltv/plex/app/MainActivity;->questSeekDirection:I
     sput-wide v9, Ltv/plex/app/MainActivity;->questLastSeekEvent:J
     new-instance v0, Landroid/view/KeyEvent;
-    const/4 v1, 0x0
-    invoke-direct {v0, v1, v6}, Landroid/view/KeyEvent;-><init>(II)V
+    sget-wide v1, Ltv/plex/app/MainActivity;->questGestureStartedAt:J
+    move-wide v3, v9
+    const/4 v5, 0x0
+    const/4 v7, 0x0
+    invoke-direct/range {v0 .. v7}, Landroid/view/KeyEvent;-><init>(JJIII)V
     invoke-virtual {p0, v0}, Ltv/plex/app/MainActivity;->dispatchKeyEvent(Landroid/view/KeyEvent;)Z
     new-instance v0, Landroid/view/KeyEvent;
-    const/4 v1, 0x1
-    invoke-direct {v0, v1, v6}, Landroid/view/KeyEvent;-><init>(II)V
+    const/4 v5, 0x1
+    invoke-direct/range {v0 .. v7}, Landroid/view/KeyEvent;-><init>(JJIII)V
     invoke-virtual {p0, v0}, Ltv/plex/app/MainActivity;->dispatchKeyEvent(Landroid/view/KeyEvent;)Z
     goto :consume
     :neutral
@@ -538,6 +552,51 @@
     return v0
 .end method
 
+.method private final questIsSeekbarTouch(Landroid/view/MotionEvent;)Z
+    .locals 5
+
+    invoke-virtual {p0}, Landroid/app/Activity;->getWindow()Landroid/view/Window;
+    move-result-object v0
+    invoke-virtual {v0}, Landroid/view/Window;->getDecorView()Landroid/view/View;
+    move-result-object v0
+    instance-of v1, v0, Landroid/view/ViewGroup;
+    if-eqz v1, :absent
+    check-cast v0, Landroid/view/ViewGroup;
+    const/4 v1, 0x2
+    new-array v1, v1, [F
+    invoke-virtual {p1}, Landroid/view/MotionEvent;->getX()F
+    move-result v2
+    const/4 v3, 0x0
+    aput v2, v1, v3
+    invoke-virtual {p1}, Landroid/view/MotionEvent;->getY()F
+    move-result v2
+    const/4 v3, 0x1
+    aput v2, v1, v3
+    const/4 v2, 0x0
+    invoke-static {v1, v0, v2}, Lcom/facebook/react/uimanager/P;->c([FLandroid/view/View;Ljava/util/List;)Landroid/view/View;
+    move-result-object v0
+    :parent
+    if-eqz v0, :absent
+    invoke-virtual {v0}, Landroid/view/View;->getTag()Ljava/lang/Object;
+    move-result-object v1
+    const-string v2, "SeekbarView"
+    invoke-virtual {v2, v1}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
+    move-result v1
+    if-nez v1, :found
+    invoke-virtual {v0}, Landroid/view/View;->getParent()Landroid/view/ViewParent;
+    move-result-object v0
+    instance-of v1, v0, Landroid/view/View;
+    if-eqz v1, :absent
+    check-cast v0, Landroid/view/View;
+    goto :parent
+    :found
+    const/4 v0, 0x1
+    return v0
+    :absent
+    const/4 v0, 0x0
+    return v0
+.end method
+
 .method public final dispatchTouchEvent(Landroid/view/MotionEvent;)Z
     .locals 6
 
@@ -546,6 +605,17 @@
     invoke-virtual {p1}, Landroid/view/MotionEvent;->getActionMasked()I
     move-result v1
     if-nez v1, :touch_up
+    invoke-direct {p0, p1}, Ltv/plex/app/MainActivity;->questIsSeekbarTouch(Landroid/view/MotionEvent;)Z
+    move-result v0
+    sput-boolean v0, Ltv/plex/app/MainActivity;->questTouchOnSeekbar:Z
+    if-eqz v0, :classify_control
+    const-string v1, "QuestPlexInput"
+    const-string v2, "seekbar_pointer_down"
+    invoke-static {v1, v2}, Landroid/util/Log;->d(Ljava/lang/String;Ljava/lang/String;)I
+    const/4 v0, 0x1
+    sput-boolean v0, Ltv/plex/app/MainActivity;->questTouchOnControl:Z
+    goto :normal_touch
+    :classify_control
     invoke-direct {p0, p1}, Ltv/plex/app/MainActivity;->questIsPlaybackControl(Landroid/view/MotionEvent;)Z
     move-result v0
     sput-boolean v0, Ltv/plex/app/MainActivity;->questTouchOnControl:Z
@@ -582,6 +652,17 @@
     move-result v1
     const/4 v2, 0x1
     if-ne v1, v2, :return_touch
+    # The timeline's native pointer gesture already seeks to the clicked point.
+    # An extra DPAD_CENTER would also activate a TV control after that seek.
+    sget-boolean v1, Ltv/plex/app/MainActivity;->questTouchOnSeekbar:Z
+    if-eqz v1, :confirm_control
+    const-string v1, "QuestPlexInput"
+    const-string v2, "seekbar_pointer_up"
+    invoke-static {v1, v2}, Landroid/util/Log;->d(Ljava/lang/String;Ljava/lang/String;)I
+    const/4 v1, 0x0
+    sput-boolean v1, Ltv/plex/app/MainActivity;->questTouchOnSeekbar:Z
+    goto :return_touch
+    :confirm_control
     new-instance v1, Landroid/view/KeyEvent;
     const/4 v2, 0x0
     const/16 v3, 0x17

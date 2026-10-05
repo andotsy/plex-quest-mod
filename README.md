@@ -5,6 +5,11 @@
 Patch your own Plex Android APK for TV-style browsing and Quest controller input.
 Tested on Quest 3. No Plex APK is provided here.
 
+Click the playback timeline with the index trigger to seek to that point.
+Either thumbstick seeks ±10 seconds per jump, increasing to ±30 seconds after
+2 seconds of holding and ±60 seconds after 5 seconds. Release or change direction
+to reset the jump size.
+
 **Supported input:** Plex **2026.17.0** (version code **971050399**, Play build).
 Use a universal `.apk` or a complete `.apkm` / `.xapk` containing ARM64 libraries.
 A split `base.apk` alone is incomplete.

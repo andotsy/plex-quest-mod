@@ -9,12 +9,32 @@ from pathlib import Path
 from zipfile import ZipFile
 from unittest.mock import patch
 
+from hermes_dec.parsers.hbc_bytecode_parser import parse_hbc_bytecode
+from hermes_dec.parsers.hbc_file_parser import HBCReader
+
 from plex_quest.build import download, package_apks, require_native_libraries, sign, verify_standalone
-from plex_quest.hermes import patch_bundle
-from plex_quest.smali import TEMPLATE, get_method, inject_navigation_handler, patch_activity, patch_application, patch_application_id, patch_key_mapping
+from plex_quest.hermes import UnsupportedBundle, patch_bundle
+from plex_quest.smali import TEMPLATE, get_method, inject_navigation_handler, patch_activity, patch_application, patch_application_id, patch_key_mapping, patch_seek_event
 
 
 class NativePatchTests(unittest.TestCase):
+    def test_queued_seek_events_capture_their_own_hold_duration(self):
+        original = (
+            '.method public final emitOnKeyEvent(Landroid/view/KeyEvent;)V\n    .locals 3\n'
+            '    invoke-static {}, Lcom/facebook/react/bridge/Arguments;->createMap()Lcom/facebook/react/bridge/WritableMap;\n'
+            '    move-result-object v0\n'
+            '    invoke-virtual {p1}, Landroid/view/KeyEvent;->getAction()I\n'
+            '    move-result p1\n'
+            '    invoke-virtual {p0, v0}, Ltv/plex/video/NativeKeyHandlerSpec;->emitOnKey(Lcom/facebook/react/bridge/ReadableMap;)V\n'
+            '    return-void\n.end method\n'
+        )
+        patched = patch_seek_event(original)
+        self.assertIn('->getEventTime()J', patched)
+        self.assertIn('->getDownTime()J', patched)
+        self.assertLess(patched.index('->questSeekStepForHold'), patched.index('move-result p1'))
+        self.assertEqual(patch_seek_event(patched), patched)
+        self.assertIn('NativeKeyHandlerSpec;->emitOnKey', patched)
+
     def test_package_identity_changes_without_renaming_native_classes(self):
         original = (
             '.class public final Ltv/plex/app/BuildConfig;\n'
@@ -237,15 +257,73 @@ class HermesIntegrationTests(unittest.TestCase):
             original = archive.read("assets/index.android.bundle")
         patched = patch_bundle(original)
         allowed = set(range(0x788FDB + 0x5E4, 0x788FDB + 0x5E8))
+        allowed.update(range(0x788FDB + 0x5E8, 0x788FDB + 0x606))
+        allowed.update(range(0x788F0E + 0xE, 0x788F0E + 0x2D))
         allowed.update(range(0xC10E00 + 0x12, 0xC10E00 + 0x16))
         allowed.update((0xC48F4D + 0xA6, 0xC48F4D + 0xA9, 0xC48F4D + 0x146))
         allowed.update(range(0xC48D93 + 0x73, 0xC48D93 + 0x78))
+        allowed.add(0xC08CD1 + 0x76)
+        allowed.update(range(0xC08E2C + 0x30F, 0xC08E2C + 0x3B1))
+        allowed.update(range(0xC0DE59 + 0xE, 0xC0DE59 + 0x17))
         allowed.update(range(len(original) - 20, len(original)))
         changed = {index for index, (old, new) in enumerate(zip(original, patched)) if old != new}
         self.assertEqual(len(original), len(patched))
         self.assertTrue(changed.issubset(allowed))
         self.assertEqual(sha1(patched[:-20]).digest(), patched[-20:])
         self.assertEqual(patch_bundle(patched), patched)
+
+    def test_timeline_uses_the_existing_pointer_wrapper_and_a_scoped_native_marker(self):
+        with ZipFile(os.environ["PLEX_TEST_APK"]) as archive:
+            patched = patch_bundle(archive.read("assets/index.android.bundle"))
+        reader = HBCReader()
+        reader.read_whole_file(BytesIO(patched))
+        selector = {ins.original_pos: ins for ins in parse_hbc_bytecode(reader.function_headers[57908], reader)}
+        self.assertEqual((selector[0x74].arg1, selector[0x74].arg2), (4, 1))
+        wrapper = list(parse_hbc_bytecode(reader.function_headers[57910], reader))
+        native_marker = [ins for ins in wrapper if ins.inst.name == "LoadConstStringLongIndex"
+                         and ins.arg1 == 18 and ins.arg2 == 84136]
+        test_id = [ins for ins in wrapper if ins.inst.name == "PutNewOwnByIdShort"
+                   and (ins.arg1, ins.arg2, ins.arg3) == (0, 18, 237)]
+        self.assertEqual(len(native_marker), 1)
+        self.assertEqual(len(test_id), 1)
+        renderer = next(ins for ins in wrapper if ins.original_pos > test_id[0].original_pos
+                        and ins.inst.name == "Call3")
+        self.assertLess(native_marker[0].original_pos, test_id[0].original_pos)
+        self.assertLess(test_id[0].original_pos, renderer.original_pos)
+        native_root = [ins for ins in wrapper if ins.inst.name == "LoadConstStringLongIndex"
+                       and ins.arg1 == 8 and ins.arg2 == 34614]
+        self.assertEqual(len(native_root), 1)
+        self.assertTrue(any(ins.inst.name == "GetByVal" and (ins.arg1, ins.arg2, ins.arg3) == (8, 7, 8)
+                            for ins in wrapper))
+        self.assertTrue(any(ins.inst.name == "PutNewOwnById" and (ins.arg1, ins.arg2, ins.arg3) == (0, 7, 64756)
+                            for ins in wrapper))
+        self.assertTrue(any(ins.inst.name == "LoadConstStringLongIndex" and ins.arg2 == 63009
+                            for ins in wrapper))
+        self.assertTrue(any(ins.inst.name == "PutByVal" and (ins.arg1, ins.arg2, ins.arg3) == (18, 7, 17)
+                            for ins in wrapper))
+        callback = {ins.original_pos: ins for ins in parse_hbc_bytecode(reader.function_headers[58007], reader)}
+        self.assertEqual((callback[0xE].inst.name, callback[0xE].arg1), ("LoadConstFalse", 0))
+        self.assertEqual((callback[0x10].inst.name, callback[0x10].arg1), ("Jmp", 7))
+
+    def test_unknown_timeline_selector_is_rejected(self):
+        with ZipFile(os.environ["PLEX_TEST_APK"]) as archive:
+            bundle = bytearray(archive.read("assets/index.android.bundle"))
+        bundle[0xC08CD1 + 0x75] = 5  # Different destination register / module wiring.
+        bundle[-20:] = sha1(bundle[:-20]).digest()
+        with self.assertRaisesRegex(UnsupportedBundle, "TV seekbar component selector"):
+            patch_bundle(bytes(bundle))
+
+    def test_relative_seek_has_a_symmetric_default_and_one_captured_distance(self):
+        with ZipFile(os.environ["PLEX_TEST_APK"]) as archive:
+            patched = patch_bundle(archive.read("assets/index.android.bundle"))
+        reader = HBCReader()
+        reader.read_whole_file(BytesIO(patched))
+        delta = list(parse_hbc_bytecode(reader.function_headers[24578], reader))
+        default = next(ins for ins in delta if ins.original_pos == 0xE)
+        self.assertEqual((default.inst.name, default.arg1, default.arg2), ("LoadConstInt", 4, 10000))
+        self.assertTrue(any(ins.inst.name == "Sub" and (ins.arg1, ins.arg2, ins.arg3) == (4, 5, 4)
+                            for ins in delta))
+        self.assertEqual(sum(ins.inst.name == "Call2" and ins.original_pos == 0x4B for ins in delta), 1)
 
 
 @unittest.skipUnless(os.environ.get("PLEX_TEST_MERGED_APK") and os.environ.get("PLEX_TEST_RENAMED_APK"),

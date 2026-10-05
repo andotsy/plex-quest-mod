@@ -198,8 +198,9 @@ def build(source: Path, output: Path, apktool: Path, docker: bool = False,
     if output.exists() and any(output.iterdir()):
         raise ValueError("Output directory must be empty; choose a new directory.")
     output.mkdir(parents=True, exist_ok=True)
-    work_root = ROOT / ".work"
-    work_root.mkdir(exist_ok=True)
+    # Network-mounted repos can place high-I/O temporary build files locally.
+    work_root = Path(os.environ.get("PLEX_PATCH_WORKDIR", ROOT / ".work")).resolve()
+    work_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="patch-", dir=work_root) as temporary:
         work = Path(temporary)
         base, splits = package_apks(source.resolve(), work / "input")
@@ -259,7 +260,8 @@ def build(source: Path, output: Path, apktool: Path, docker: bool = False,
             "identity_verification": identity,
             "payload_verification": payload_report,
             "patches": ["tv-layout", "controller-input", "pointer-scroll", "episode-deck-input", "navigation-popover-input",
-                         "seek-wake-race", "inline-season-episode-rows", "standalone-packaging", "separate-package-id"],
+                         "seek-wake-race", "inline-season-episode-rows", "standalone-packaging", "separate-package-id",
+                         "pointer-timeline-seek", "symmetric-hold-accelerated-seek"],
             "unsigned_apks": {path.name: sha256(path.read_bytes()).hexdigest()
                               for path in sorted(unsigned.glob("*.apk"))},
         }
@@ -277,8 +279,8 @@ def sign(directory: Path, output: Path, signer: Path, docker: bool = False,
     missing = [name for name in required if not os.environ.get(name)]
     if missing:
         raise ValueError("Missing signing configuration: " + ", ".join(missing))
-    work_root = ROOT / ".work"
-    work_root.mkdir(exist_ok=True)
+    work_root = Path(os.environ.get("PLEX_PATCH_WORKDIR", ROOT / ".work")).resolve()
+    work_root.mkdir(parents=True, exist_ok=True)
     output = output.resolve()
     if output.exists() and any(output.iterdir()):
         raise ValueError("Signing output directory must be empty.")
