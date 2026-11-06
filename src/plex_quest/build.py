@@ -12,8 +12,8 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 from zipfile import ZipFile
 
-from . import ORIGINAL_PACKAGE, QUEST_PACKAGE, SUPPORTED_PLEX, VERSION
-from .hermes import patch_bundle
+from . import ORIGINAL_PACKAGE, QUEST_PACKAGE, VERSION
+from .hermes import bundle_profile, patch_bundle
 from .smali import patch_smali
 
 
@@ -211,11 +211,15 @@ def build(source: Path, output: Path, apktool: Path, docker: bool = False,
                     raise ValueError("--split inputs must be configuration APKs, not another base APK.")
         require_native_libraries([base, *splits])
         with ZipFile(base) as archive:
-            bundle = patch_bundle(archive.read("assets/index.android.bundle"))
+            original_bundle = archive.read("assets/index.android.bundle")
+            profile = bundle_profile(original_bundle)
+            print(f"Detected supported Plex build: {profile.label}", flush=True)
+            bundle = patch_bundle(original_bundle)
             preserved = {name: archive.read(name) for name in ("AndroidManifest.xml", "resources.arsc")}
         tree = work / "decoded"
         java_jar(apktool, ["d", "-r", str(base), "-o", str(tree)], {work: "/work"}, docker)
-        patch_smali(tree)
+        if patch_smali(tree) != profile:
+            raise ValueError("Native code and Hermes bundle belong to different Plex builds.")
         (tree / "assets/index.android.bundle").write_bytes(bundle)
         built = work / "base-patched.apk"
         java_jar(apktool, ["b", str(tree), "-o", str(built)], {work: "/work"}, docker)
@@ -247,7 +251,8 @@ def build(source: Path, output: Path, apktool: Path, docker: bool = False,
         shutil.copyfile(standalone, unsigned / "plex-quest-tv.apk")
         report = {
             "patch_version": VERSION,
-            "plex_version": SUPPORTED_PLEX,
+            "plex_version": f"{profile.version} ({profile.version_code})",
+            "plex_flavor": profile.flavor,
             "source_sha256": sha256(source.read_bytes()).hexdigest(),
             "original_package_id": ORIGINAL_PACKAGE,
             "package_id": QUEST_PACKAGE,
@@ -261,7 +266,7 @@ def build(source: Path, output: Path, apktool: Path, docker: bool = False,
             "payload_verification": payload_report,
             "patches": ["tv-layout", "controller-input", "pointer-scroll", "episode-deck-input", "navigation-popover-input",
                          "seek-wake-race", "inline-season-episode-rows", "standalone-packaging", "separate-package-id",
-                         "pointer-timeline-seek", "symmetric-hold-accelerated-seek"],
+                         "pointer-timeline-seek", "symmetric-hold-accelerated-seek", "reveal-controls-before-play-pause"],
             "unsigned_apks": {path.name: sha256(path.read_bytes()).hexdigest()
                               for path in sorted(unsigned.glob("*.apk"))},
         }

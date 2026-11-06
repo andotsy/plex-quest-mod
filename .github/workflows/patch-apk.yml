@@ -3,9 +3,17 @@ name: Patch Plex APK
 on:
   workflow_dispatch:
     inputs:
-      apk_url:
-        description: Direct URL to a complete Plex 2026.17.0 APKM/XAPK or universal APK (must include ARM64 libraries)
+      apk_source:
+        description: Choose how to obtain your original Plex APK
         required: true
+        default: manual
+        type: choice
+        options:
+          - manual
+          - meta
+      apk_url:
+        description: Manual source only — direct URL to a supported complete APK/APKM/XAPK (leave blank for Meta)
+        required: false
         type: string
       sign_apks:
         description: Sign the standalone APK for installation using repository secrets
@@ -17,8 +25,44 @@ permissions:
   contents: read
 
 jobs:
+  download:
+    name: Download original APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Test download helpers
+        env:
+          PYTHONPATH: src
+        run: python -m unittest discover -s tests -p test_meta.py -v
+      - name: Download manually supplied APK
+        if: ${{ inputs.apk_source == 'manual' || inputs.apk_source == '' }}
+        env:
+          APK_URL: ${{ inputs.apk_url }}
+        run: python scripts/download_apk.py --url "$APK_URL" --out input/plex-source.zip
+      - name: Download supported Plex from Meta
+        if: ${{ inputs.apk_source == 'meta' }}
+        env:
+          META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
+        run: python scripts/download_apk.py --meta --out input/plex-source.zip
+      - name: Transfer original package to patch job
+        uses: actions/upload-artifact@v7
+        with:
+          name: plex-original-${{ github.run_id }}
+          path: input/plex-source.zip
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 1
+
   patch:
-    runs-on: ubuntu-latest
+    name: Patch and sign APK
+    needs: download
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
@@ -34,11 +78,14 @@ jobs:
       - name: Test patch helpers
         env:
           PYTHONPATH: src
-        run: python -m unittest discover -s tests -v
-      - name: Download and patch APK
-        env:
-          APK_URL: ${{ inputs.apk_url }}
-        run: python scripts/patch_apk.py --url "$APK_URL" --out dist
+        run: python -m unittest discover -s tests -p test_patches.py -v
+      - name: Get downloaded original package
+        uses: actions/download-artifact@v8
+        with:
+          name: plex-original-${{ github.run_id }}
+          path: input
+      - name: Patch original APK
+        run: python scripts/patch_apk.py --input input/plex-source.zip --out dist
       - name: Sign standalone APK
         if: ${{ inputs.sign_apks }}
         env:
@@ -56,6 +103,7 @@ jobs:
             dist/unsigned/*.apk
             dist/patch-report.json
           if-no-files-found: error
+          overwrite: true
           retention-days: 7
       - name: Upload signed standalone APK and report
         if: ${{ inputs.sign_apks }}
@@ -66,4 +114,5 @@ jobs:
             dist/signed/*-signed.apk
             dist/patch-report.json
           if-no-files-found: error
+          overwrite: true
           retention-days: 7
