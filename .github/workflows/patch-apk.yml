@@ -3,9 +3,17 @@ name: Patch Plex APK
 on:
   workflow_dispatch:
     inputs:
-      apk_url:
-        description: Direct URL to Plex 2026.18.0 Meta Horizon APK or 2026.17.0 Play APK/APKM/XAPK (must include ARM64 libraries)
+      apk_source:
+        description: Choose how to obtain your original Plex APK
         required: true
+        default: manual
+        type: choice
+        options:
+          - manual
+          - meta
+      apk_url:
+        description: Manual source only — direct URL to a supported complete APK/APKM/XAPK (leave blank for Meta)
+        required: false
         type: string
       sign_apks:
         description: Sign the standalone APK for installation using repository secrets
@@ -35,10 +43,16 @@ jobs:
         env:
           PYTHONPATH: src
         run: python -m unittest discover -s tests -v
-      - name: Download and patch APK
+      - name: Download and patch manually supplied APK
+        if: ${{ inputs.apk_source == 'manual' || inputs.apk_source == '' }}
         env:
           APK_URL: ${{ inputs.apk_url }}
         run: python scripts/patch_apk.py --url "$APK_URL" --out dist
+      - name: Download supported Plex from Meta and patch APK
+        if: ${{ inputs.apk_source == 'meta' }}
+        env:
+          META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
+        run: python scripts/patch_apk.py --meta --out dist
       - name: Sign standalone APK
         if: ${{ inputs.sign_apks }}
         env:

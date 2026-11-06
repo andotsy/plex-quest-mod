@@ -6,22 +6,29 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from plex_quest.build import ROOT, build, download, tool
+from plex_quest.meta import download_meta
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description="Patch supported Plex Play/Meta Horizon APKs for Quest TV/controller use.")
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--input", type=Path, help="Locally supplied APK, APKM, or XAPK")
     source.add_argument("--url", help="Direct download URL to APK, APKM, or XAPK")
+    source.add_argument("--meta", action="store_true",
+                        help="Download supported Plex from Meta using the META_ACCESS_TOKEN environment variable")
     parser.add_argument("--out", type=Path, default=ROOT / "dist")
     parser.add_argument("--apktool", type=Path, help="Apktool 3.0.3 JAR; downloaded/verified if omitted")
     parser.add_argument("--editor", type=Path, help="APKEditor 1.4.9 JAR; downloaded/verified if omitted")
     parser.add_argument("--split", type=Path, action="append", default=[],
                         help="Matching configuration APK to include; repeat for each split when input is base-only")
     parser.add_argument("--docker", action="store_true", help="Use Docker's Java runtime instead of local Java")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    if args.url is not None and not args.url.strip():
+        parser.error("The manual APK URL is required when using --url.")
     source_path = args.input
-    if args.url:
+    if args.meta:
+        source_path = download_meta(ROOT / ".work/downloaded-meta.apk")
+    elif args.url:
         source_path = download(args.url, ROOT / ".work/downloaded-package.zip")
     build(source_path, args.out, tool("apktool", args.apktool), args.docker,
           editor=tool("editor", args.editor), extra_splits=args.split)

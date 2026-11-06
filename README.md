@@ -22,12 +22,62 @@ to reset the jump size.
 
 | Source | Plex version | Version code |
 | --- | --- | --- |
-| Meta Horizon Store (extract from your Quest) | **2026.18.0** | **971050431** |
+| Meta Horizon Store (token or Quest extraction) | **2026.18.0** | **971050431** |
 | Google Play | **2026.17.0** | **971050399** |
 
 The patcher detects the build automatically. Other versions or store variants are
 rejected; a matching version name alone is not enough. Supply a standalone `.apk`
 or a complete `.apkm` / `.xapk` containing ARM64 libraries.
+
+## Patch with GitHub Actions
+
+1. **Fork this repository**, then open **Actions** in **your fork** and enable workflows if prompted.
+2. Add the [signing secrets](#signing) to your fork. This is a one-time setup.
+3. Choose a source below. For `manual`, prepare a direct APK URL. For `meta`, add
+   the optional `META_ACCESS_TOKEN` secret using the [Meta setup](#optional-meta-store-download).
+4. Open **Actions → Patch Plex APK → Run workflow**. Choose **`apk_source`**,
+   leave **signing enabled**, and run it.
+5. When the run finishes, download the **`plex-quest-signed-…`** artifact under **Artifacts** and unzip it.
+6. Sideload **`plex-quest-tv-aligned-signed.apk`** onto your Quest. With ADB:
+
+   ```bash
+   adb install -r plex-quest-tv-aligned-signed.apk
+   ```
+
+| `apk_source` | Setup | `apk_url` |
+| --- | --- | --- |
+| **`manual`** (default) | [Extract your APK](#get-the-apk-from-your-quest) or supply another supported complete APK/APKM/XAPK; upload it to a file host accessible to GitHub Actions without a browser login | Paste the **direct download URL**, not a download page |
+| **`meta`** (optional, experimental) | Save your own Meta user access token as the **`META_ACCESS_TOKEN`** repository secret | Leave blank |
+
+The result is **one signed, standalone APK**. It uses `com.plexapp.android.tv`,
+with its own login/settings, and can coexist with the official Plex app. Reuse the
+same signing key for updates to an existing mod installation.
+
+## Optional Meta Store download
+
+The `meta` source lets GitHub Actions download Plex directly from Meta, without
+extracting or hosting an APK yourself. Set it up in **your own fork**:
+
+1. Add [Plex](https://www.meta.com/experiences/plex-find-movies-tv-shows/1136900442841511/)
+   to the Quest library of the Meta account you will use.
+2. Obtain your own Meta Quest **user access token** from an authenticated Meta
+   session. The [community token guide](https://computerelite.github.io/tools/Oculus/ObtainToken.html)
+   describes obtaining one from Meta's developer dashboard. Copy the raw token,
+   not an encoded URL or an entire cookie export.
+3. Open **Settings → Secrets and variables → Actions → New repository secret**.
+   Name it **`META_ACCESS_TOKEN`** and put the token in its value.
+4. Run the workflow with **`apk_source: meta`** and **`apk_url` empty**.
+
+Only this source uses the token. The downloader reads it from the secret/environment;
+there is no token command-line option or workflow input, and it does not print
+authenticated URLs or Meta response bodies. Do not put the token in `apk_url`.
+
+The lookup requests the exact supported **2026.18.0 (971050431)** version of the
+official Plex app. It does **not** switch to a newer release. The downloaded APK
+must still pass all patcher version, code-layout, and ARM64 checks. If Meta rejects
+the token or no longer serves that build, refresh the secret or choose `manual`.
+This integration uses an [unofficial Meta API](https://github.com/ComputerElite/OculusGraphQLApiLib/blob/main/OculusGraphQLApiLib/GraphQL/GraphQLClient.cs)
+and has not yet been verified with a live user token.
 
 ## Get the APK from your Quest
 
@@ -53,28 +103,8 @@ libraries, so this extracted file can be used directly. If `pm path` returns mor
 than one APK, pull **all** of them, put them in a ZIP archive, and give that archive
 a `.xapk` extension. A split `base.apk` alone is incomplete.
 
-## Patch with GitHub Actions
-
-1. Upload your extracted APK (or complete APKM/XAPK) to a file host that provides a
-   **direct download URL accessible to GitHub Actions**, without a browser login.
-2. **Fork this repository**, then open **Actions** in **your fork** and enable workflows if prompted.
-3. Add the [signing secrets](#signing) to your fork. This is a one-time setup.
-4. Open **Actions → Patch Plex APK → Run workflow**. Paste the direct URL to your
-   APK/APKM/XAPK file (not a download page), leave **signing enabled**, and run it.
-5. When the run finishes, download the **`plex-quest-signed-…`** artifact under **Artifacts** and unzip it.
-6. Sideload **`plex-quest-tv-aligned-signed.apk`** onto your Quest. With ADB:
-
-   ```bash
-   adb install -r plex-quest-tv-aligned-signed.apk
-   ```
-
-The result is **one signed, standalone APK**. It uses `com.plexapp.android.tv`,
-with its own login/settings, and can coexist with the official Plex app. Reuse the
-same signing key for updates to an existing mod installation.
-
-**Extraction runs on your computer; patching and signing run on GitHub.** The
-workflow cannot connect to your headset. It does not automatically download apps
-from the Meta Horizon Store or Google Play.
+Extraction runs on your computer; patching and signing run on GitHub. The workflow
+cannot connect to your headset. Google Play downloading is not integrated.
 
 <details>
 <summary>Optional: patch and sign locally instead of uploading an APK</summary>
@@ -87,6 +117,10 @@ python scripts/patch_apk.py --input plex-original.apk --out dist
 ```
 
 For a split install, add `--split path/to/split.apk` for every configuration APK.
+For the optional Meta source, set `META_ACCESS_TOKEN` in your environment and use
+`python scripts/patch_apk.py --meta --out dist` instead. Do not pass the token as
+an argument.
+
 Sign the output with your saved key from the [signing setup](#signing):
 
 ```bash
