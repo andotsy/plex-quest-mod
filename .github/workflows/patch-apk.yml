@@ -103,6 +103,7 @@ jobs:
             dist/unsigned/*.apk
             dist/patch-report.json
           if-no-files-found: error
+          overwrite: true
           retention-days: 7
       - name: Upload signed standalone APK and report
         if: ${{ inputs.sign_apks }}
@@ -113,4 +114,5 @@ jobs:
             dist/signed/*-signed.apk
             dist/patch-report.json
           if-no-files-found: error
+          overwrite: true
           retention-days: 7
