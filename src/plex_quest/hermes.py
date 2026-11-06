@@ -64,14 +64,46 @@ def patch_bundle(original: bytes) -> bytes:
     get_id = data[seek_offset + 0x24]
     put_id = data[expected[24576][0] + 0x2C]
     load_env = data[seek_offset + 0x606]
+    # Screen-background taps and the assigned controller buttons all arrive as
+    # playOrPause. Reuse the seek patch's unreachable padding for a visibility
+    # guard, branching on Plex's own isSleeping snapshot rather than a timer or
+    # a native-view heuristic. Hidden controls wake without toggling playback;
+    # visible controls retain the original play/pause and seek-commit paths.
+    for position, operands in {
+        0x9C: ("StrictEq", 7, 5, 12),
+        0x96: ("GetById", 5, 6, 9, 42007),  # isSleeping.
+        0x972: ("LoadFromEnvironment", 10, 5, 0),
+        0xAC3: ("LoadFromEnvironment", 6, 2, 0),
+        0xAD6: ("GetById", 7, 8, 20, 44345),  # wakeUp.
+    }.items():
+        ins = seek[position]
+        actual = (ins.inst.name, *(getattr(ins, f"arg{n}") for n in range(1, len(operands))))
+        if actual != operands:
+            raise UnsupportedBundle("Unexpected playback-controls visibility logic.")
+    branch = seek[0x3AC]
+    if (branch.inst.name, branch.arg1, branch.arg2, branch.arg3) not in (
+        ("JStrictEqualLong", 0x972 - 0x3AC, 13, 10),
+        ("JStrictEqualLong", 0x5FA - 0x3AC, 13, 10),
+    ):
+        raise UnsupportedBundle("Unexpected play/pause dispatch branch.")
+    if seek[0x57].inst.name != "JmpTrueLong" or seek[0x921].inst.name != "JmpLong":
+        raise UnsupportedBundle("Unexpected playback-controls jump opcodes.")
+    visibility_guard = (
+        bytes([data[seek_offset + 0x57]])
+        + (0xAC3 - 0x5FA).to_bytes(4, "little", signed=True) + bytes([7])
+        + bytes([data[seek_offset + 0x921]])
+        + (0x972 - 0x600).to_bytes(4, "little", signed=True)
+        + bytes(1)
+    )
     event_step = (
         bytes([load_env, 14, 2, 0])
         + bytes([get_id, 12, 4, 34]) + (49673).to_bytes(2, "little")
         + bytes([put_id, 14, 12, 1]) + (49673).to_bytes(2, "little")
         + bytes([jump_opcode, 14])
-        + bytes(12)
+        + visibility_guard
     )
     data[seek_offset + 0x5E8:seek_offset + 0x606] = event_step
+    data[seek_offset + 0x3AD:seek_offset + 0x3B1] = (0x5FA - 0x3AC).to_bytes(4, "little", signed=True)
 
     delta_offset = expected[24578][0]
     delta = functions[24578]

@@ -257,6 +257,7 @@ class HermesIntegrationTests(unittest.TestCase):
             original = archive.read("assets/index.android.bundle")
         patched = patch_bundle(original)
         allowed = set(range(0x788FDB + 0x5E4, 0x788FDB + 0x5E8))
+        allowed.update(range(0x788FDB + 0x3AD, 0x788FDB + 0x3B1))
         allowed.update(range(0x788FDB + 0x5E8, 0x788FDB + 0x606))
         allowed.update(range(0x788F0E + 0xE, 0x788F0E + 0x2D))
         allowed.update(range(0xC10E00 + 0x12, 0xC10E00 + 0x16))
@@ -271,6 +272,58 @@ class HermesIntegrationTests(unittest.TestCase):
         self.assertTrue(changed.issubset(allowed))
         self.assertEqual(sha1(patched[:-20]).digest(), patched[-20:])
         self.assertEqual(patch_bundle(patched), patched)
+
+    def test_play_pause_dispatch_reveals_hidden_controls_then_toggles_until_hidden_again(self):
+        with ZipFile(os.environ["PLEX_TEST_APK"]) as archive:
+            patched = patch_bundle(archive.read("assets/index.android.bundle"))
+        reader = HBCReader()
+        reader.read_whole_file(BytesIO(patched))
+        handler = {ins.original_pos: ins for ins in parse_hbc_bytecode(reader.function_headers[24581], reader)}
+
+        def destination(key, sleeping):
+            # Execute the actual patched dispatch/guard instructions until they
+            # reach Plex's existing play/pause, wake-up, or other-key path.
+            registers = {7: sleeping, 10: key, 13: "playOrPause"}
+            pc = 0x3AC
+            for _ in range(4):
+                if pc in (0x972, 0xAC3, 0x3B3):
+                    return pc
+                ins = handler[pc]
+                if ins.inst.name == "JStrictEqualLong":
+                    pc += ins.arg1 if registers[ins.arg2] == registers[ins.arg3] else 7
+                elif ins.inst.name == "JmpTrueLong":
+                    pc += ins.arg1 if registers[ins.arg2] else 6
+                elif ins.inst.name == "JmpLong":
+                    pc += ins.arg1
+                else:
+                    self.fail(f"Unexpected playback dispatch instruction: {ins}")
+            self.fail("Playback dispatch did not reach an existing handler")
+
+        for initially_playing in (False, True):
+            playing = initially_playing
+            sleeping = True
+            for expected_playing in (initially_playing, not initially_playing, initially_playing):
+                target = destination("playOrPause", sleeping)
+                if target == 0xAC3:
+                    sleeping = False
+                else:
+                    self.assertEqual(target, 0x972)
+                    playing = not playing
+                self.assertEqual(playing, expected_playing)
+            sleeping = True  # Plex's normal auto-hide or explicit hide.
+            self.assertEqual(destination("playOrPause", sleeping), 0xAC3)
+        self.assertEqual(destination("fastForward", True), 0x3B3)
+        self.assertEqual(destination("select", False), 0x3B3)
+        # The new guard must be skipped by the existing held-seek path.
+        self.assertEqual((handler[0x5F8].inst.name, handler[0x5F8].arg1), ("Jmp", 14))
+
+    def test_unknown_playback_visibility_logic_is_rejected(self):
+        with ZipFile(os.environ["PLEX_TEST_APK"]) as archive:
+            bundle = bytearray(archive.read("assets/index.android.bundle"))
+        bundle[0x788FDB + 0x9D] = 8  # Visibility no longer lives in the expected register.
+        bundle[-20:] = sha1(bundle[:-20]).digest()
+        with self.assertRaisesRegex(UnsupportedBundle, "playback-controls visibility"):
+            patch_bundle(bytes(bundle))
 
     def test_timeline_uses_the_existing_pointer_wrapper_and_a_scoped_native_marker(self):
         with ZipFile(os.environ["PLEX_TEST_APK"]) as archive:

@@ -261,7 +261,7 @@ def build(source: Path, output: Path, apktool: Path, docker: bool = False,
             "payload_verification": payload_report,
             "patches": ["tv-layout", "controller-input", "pointer-scroll", "episode-deck-input", "navigation-popover-input",
                          "seek-wake-race", "inline-season-episode-rows", "standalone-packaging", "separate-package-id",
-                         "pointer-timeline-seek", "symmetric-hold-accelerated-seek"],
+                         "pointer-timeline-seek", "symmetric-hold-accelerated-seek", "reveal-controls-before-play-pause"],
             "unsigned_apks": {path.name: sha256(path.read_bytes()).hexdigest()
                               for path in sorted(unsigned.glob("*.apk"))},
         }
