@@ -60,13 +60,25 @@ extracting or hosting an APK yourself. Set it up in **your own fork**:
 
 1. Add [Plex](https://www.meta.com/experiences/plex-find-movies-tv-shows/1136900442841511/)
    to the Quest library of the Meta account you will use.
-2. Obtain your own Meta Quest **user access token** from an authenticated Meta
-   session. The [community token guide](https://computerelite.github.io/tools/Oculus/ObtainToken.html)
-   describes obtaining one from Meta's developer dashboard. Copy the raw token,
-   not an encoded URL or an entire cookie export.
-3. Open **Settings → Secrets and variables → Actions → New repository secret**.
-   Name it **`META_ACCESS_TOKEN`** and put the token in its value.
-4. Run the workflow with **`apk_source: meta`** and **`apk_url` empty**.
+2. Sign in to the [Meta Horizon Developer Dashboard](https://developers.meta.com/horizon/manage/)
+   with that same Meta account.
+3. In the dashboard's left navigation, open **Account → Account settings**.
+4. Find **Get Oculus platform utility token**. Select your platform if prompted,
+   click **Generate token**, and copy the complete **user token**. Meta documents
+   these steps in its [Platform Utility credentials guide](https://developers.meta.com/vr/resources/publish-reference-platform-command-line-utility/).
+5. In your GitHub fork, open **Settings → Secrets and variables → Actions →
+   New repository secret**. Name it **`META_ACCESS_TOKEN`** and paste the token
+   into its value.
+6. Run the workflow with **`apk_source: meta`** and **`apk_url` empty**. While this
+   change is still in a pull request, select the PR's branch in **Run workflow**.
+
+If the dashboard does not offer token generation, an alternative documented by
+[BSManager](https://github.com/Zagrios/bs-manager/wiki/How-to-obtain-your-Oculus-Token)
+is to sign in at [secure.oculus.com](https://secure.oculus.com), open Chrome/Edge
+Developer Tools (**⌘⌥I** on macOS, **Ctrl+Shift+I** on Windows), then choose
+**Application → Storage → Cookies → https://secure.oculus.com**. Find **`oc_ac_at`**
+and copy its entire **Value** as your user token. Meta can change its session
+storage; if the cookie is absent, use dashboard generation or the manual APK path.
 
 Only this source uses the token. The downloader reads it from the secret/environment;
 there is no token command-line option or workflow input, and it does not print
