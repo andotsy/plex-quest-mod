@@ -63,8 +63,9 @@ extracting or hosting an APK yourself. Set it up in **your own fork**:
 2. Sign in to the [Meta Horizon Developer Dashboard](https://developers.meta.com/horizon/manage/)
    with that same Meta account.
 3. In the dashboard's left navigation, open **Account → Account settings**.
-4. Find **Get Oculus platform utility token**. Select your platform if prompted,
-   click **Generate token**, and copy the complete **user token**. Meta documents
+4. Find **Get Oculus platform utility token** and select **Linux**, since this
+   workflow runs on an Ubuntu GitHub Actions runner. Click **Generate token** and
+   copy the complete **user token**. Meta documents
    these steps in its [Platform Utility credentials guide](https://developers.meta.com/vr/resources/publish-reference-platform-command-line-utility/).
 5. In your GitHub fork, open **Settings → Secrets and variables → Actions →
    New repository secret**. Name it **`META_ACCESS_TOKEN`** and paste the token
