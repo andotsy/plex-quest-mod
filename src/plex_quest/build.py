@@ -267,7 +267,7 @@ def build(source: Path, output: Path, apktool: Path, docker: bool = False,
             "patches": ["tv-layout", "controller-input", "pointer-scroll", "episode-deck-input", "navigation-popover-input",
                          "seek-wake-race", "inline-season-episode-rows", "standalone-packaging", "separate-package-id",
                          "pointer-timeline-seek", "symmetric-hold-accelerated-seek", "reveal-controls-before-play-pause",
-                         "content-sized-episode-rows"]
+                         "content-sized-episode-rows", "pointer-submenu-focus", "modal-navigation-priority"]
                        + (["unavailable-vizbee-receiver-fallback"] if not profile.vizbee else []),
             "unsigned_apks": {path.name: sha256(path.read_bytes()).hexdigest()
                               for path in sorted(unsigned.glob("*.apk"))},
