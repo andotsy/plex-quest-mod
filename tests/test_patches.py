@@ -287,6 +287,8 @@ class HermesIntegrationTests(unittest.TestCase):
         allowed.add(self.profile.functions["selector"][1] + 0x76)
         allowed.update(range(self.profile.functions["pointer"][1] + 0x30F + self.profile.pointer_shift, self.profile.functions["pointer"][1] + 0x3B1 + self.profile.pointer_shift))
         allowed.update(range(self.profile.functions["commit"][1] + 0xE, self.profile.functions["commit"][1] + 0x17))
+        style = self.profile.functions["details_scroller"][1] + self.profile.row_style[0]
+        allowed.update(range(style, style + 29))
         if not self.profile.vizbee:
             allowed.update(range(self.profile.functions["vizbee_selector"][1] + 0xB8, self.profile.functions["vizbee_selector"][1] + 0xBB))
         allowed.update(range(len(original) - 20, len(original)))
@@ -456,6 +458,63 @@ class HermesIntegrationTests(unittest.TestCase):
         if self.profile.vizbee:
             # Play contains the native receiver and keeps its original selector.
             self.assertEqual(patch_bundle(original)[offset:offset + size], original[offset:offset + size])
+
+    def test_episode_row_can_grow_to_fit_its_text(self):
+        with ZipFile(os.environ[self.apk_env]) as archive:
+            patched = patch_bundle(archive.read("assets/index.android.bundle"))
+        reader = HBCReader()
+        reader.read_whole_file(BytesIO(patched))
+        handler = {ins.original_pos: ins for ins in parse_hbc_bytecode(reader.function_headers[self.profile.functions["details_scroller"][0]], reader)}
+        start = self.profile.row_style[0]
+
+        def style_for(row_id, scale):
+            registers = {1: {10: {"default": lambda value: value * scale}},
+                         16: row_id, 17: None}
+            pc = start - 10
+            for _ in range(15):
+                if pc == start + 29:
+                    return registers[7]
+                ins = handler[pc]
+                name = ins.inst.name
+                following = min(p for p in handler if p > pc)
+                if name == "LoadConstString":
+                    registers[ins.arg1] = reader.strings[ins.arg2]
+                elif name == "LoadConstUndefined":
+                    registers[ins.arg1] = None
+                elif name == "JStrictNotEqual":
+                    following = pc + ins.arg1 if registers[ins.arg2] != registers[ins.arg3] else following
+                elif name == "NewObject":
+                    registers[ins.arg1] = {}
+                elif name == "LoadFromEnvironment":
+                    registers[ins.arg1] = registers[ins.arg2][ins.arg3]
+                elif name == "GetByIdShort":
+                    registers[ins.arg1] = registers[ins.arg2][reader.strings[ins.arg4]]
+                elif name == "LoadConstInt":
+                    registers[ins.arg1] = ins.arg2
+                elif name == "Call2":
+                    registers[ins.arg1] = registers[ins.arg2](registers[ins.arg4])
+                elif name == "PutNewOwnById":
+                    registers[ins.arg1][reader.strings[ins.arg3]] = registers[ins.arg2]
+                elif name == "Jmp":
+                    following = pc + ins.arg1
+                else:
+                    self.fail(f"Unexpected episode-row style instruction: {ins}")
+                pc = following
+            self.fail("Episode-row style did not reach its original consumer")
+
+        for scale in (0.75, 1, 1.5):
+            self.assertEqual(style_for("detailsSeasonEpisodes", scale), {"minHeight": 304 * scale})
+        for row_id in ("detailsShowSeasons", "detailsShowEpisodes", "other"):
+            self.assertIsNone(style_for(row_id, 1))
+
+    def test_unknown_episode_row_sizing_is_rejected(self):
+        with ZipFile(os.environ[self.apk_env]) as archive:
+            bundle = bytearray(archive.read("assets/index.android.bundle"))
+        position = self.profile.functions["details_scroller"][1] + self.profile.row_style[0]
+        bundle[position + 13:position + 17] = (320).to_bytes(4, "little", signed=True)
+        bundle[-20:] = sha1(bundle[:-20]).digest()
+        with self.assertRaisesRegex(UnsupportedBundle, "episode-row sizing logic"):
+            patch_bundle(bytes(bundle))
 
 
 @unittest.skipUnless(os.environ.get("PLEX_TEST_META_APK"), "Meta Store APK fixture is optional and is never committed")

@@ -12,6 +12,9 @@ Vizbee casting receiver. This prevents a TV-mode crash when theme music or other
 media starts and the receiver tries to call the absent native player adapter.
 The Play build retains its native Vizbee receiver.
 
+Episode rows retain Plex's minimum loading height and grow to fit their cards,
+so episode descriptions stay above the next section's heading.
+
 During playback, the first screen-background click or assigned play/pause button
 press reveals hidden controls without changing playback. While controls are
 visible, further presses toggle play/pause. Once controls hide again, the next

@@ -17,6 +17,7 @@ class BuildProfile:
     pointer_zero: int
     pointer_object: int
     row_whitelist: tuple[int, int, int, int, int]
+    row_style: tuple[int, int]
 
     @property
     def label(self) -> str:
@@ -39,10 +40,11 @@ PLAY_2026_17 = BuildProfile(
         "deck_exit": (58065, 0xC10E00, 88),
         "details_inner": (59029, 0xC48D93, 442),
         "details_row": (59030, 0xC48F4D, 388),
+        "details_scroller": (53502, 0xB51FCE, 1878),
         "vizbee_selector": (60336, 0xCFFE2A, 343),
     },
     "LTf/a;", "LSf/d;", "Lcom/facebook/react/uimanager/P;->c",
-    3, True, 0, 0x41, 0xD4, (0x73, 0x8C, 7, 4, 0xA2),
+    3, True, 0, 0x41, 0xD4, (0x73, 0x8C, 7, 4, 0xA2), (0x5DC, 19),
 )
 
 HORIZON_2026_18 = BuildProfile(
@@ -57,10 +59,11 @@ HORIZON_2026_18 = BuildProfile(
         "deck_exit": (50120, 0xB595B3, 88),
         "details_inner": (51081, 0xB913D6, 418),
         "details_row": (51082, 0xB91578, 388),
+        "details_scroller": (47057, 0xAB1E96, 1934),
         "vizbee_selector": (52415, 0xC5D6DC, 343),
     },
     "Lie/a;", "Lhe/d;", "Lcom/facebook/react/uimanager/O;->d",
-    1, False, -2, 0x42, 0xD8, (0x5D, 0x76, 6, 5, 0x8C),
+    1, False, -2, 0x42, 0xD8, (0x5D, 0x76, 6, 5, 0x8C), (0x614, 20),
 )
 
 PROFILES = (PLAY_2026_17, HORIZON_2026_18)
