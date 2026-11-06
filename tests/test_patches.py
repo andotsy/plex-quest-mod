@@ -1,4 +1,5 @@
 import os
+import re
 import tempfile
 import threading
 import unittest
@@ -9,7 +10,7 @@ from pathlib import Path
 from zipfile import ZipFile
 from unittest.mock import patch
 
-from navigation_fixture import View, execute
+from navigation_fixture import Screen, ScreenStack, View, ViewGroup, execute
 
 from hermes_dec.parsers.hbc_bytecode_parser import parse_hbc_bytecode
 from hermes_dec.parsers.hbc_file_parser import HBCReader
@@ -21,6 +22,12 @@ from plex_quest.smali import TEMPLATE, get_method, inject_navigation_handler, pa
 
 
 class NativePatchTests(unittest.TestCase):
+    @staticmethod
+    def navigation_methods():
+        template = (TEMPLATE.parent / "navigation-input.smali").read_text()
+        return {match[1]: match[0] for match in re.finditer(
+            r"(?ms)^\.method[^\n]* ([^ (]+)\([^\n]+\n.*?^\.end method", template)}
+
     def test_pointer_finds_enabled_popup_rows_through_their_label_children(self):
         template = (TEMPLATE.parent / "navigation-input.smali").read_text()
         method = get_method(template, "questPointedNavigationItem(Landroid/view/MotionEvent;)Landroid/view/View;")
@@ -29,11 +36,78 @@ class NativePatchTests(unittest.TestCase):
             with self.subTest(tag=tag):
                 row = View(tag=tag)
                 label = View(parent=row, clickable=False)
-                self.assertIs(execute(method, {"v0": label}, ":parent"), row)
+                self.assertIs(execute(method, {"v0": label, "v4": None}, ":parent",
+                                      methods=self.navigation_methods()), row)
         for tag, enabled in (("secondary-navigation-disabled", False),
                              ("secondary-navigation", True), ("media-card", True)):
             with self.subTest(tag=tag):
-                self.assertIsNone(execute(method, {"v0": View(tag=tag, enabled=enabled)}, ":parent"))
+                self.assertIsNone(execute(method, {"v0": View(tag=tag, enabled=enabled), "v4": None}, ":parent",
+                                          methods=self.navigation_methods()))
+
+    def test_foreground_modal_wins_over_navigation_and_retained_inactive_screens(self):
+        methods = self.navigation_methods()
+        background = Screen(children=[View(tag="secondary-navigation-libraries")])
+        old_modal = Screen(presentation="MODAL")
+        inactive = Screen(activity="INACTIVE", children=[old_modal])
+        modal = Screen(presentation="TRANSPARENT_MODAL", children=[Screen()])
+        root = ViewGroup(children=[background, inactive, modal])
+        self.assertIs(execute(methods["questTopNavigationModal"], {"p0": root}, methods=methods), modal)
+        modal.alpha = 0
+        self.assertIsNone(execute(methods["questTopNavigationModal"], {"p0": root}, methods=methods))
+        modal.alpha = 1
+        modal.parent.alpha = 0
+        self.assertIsNone(execute(methods["questTopNavigationModal"], {"p0": root}, methods=methods))
+
+    def test_hidden_ancestors_do_not_make_a_navigation_popover_visible(self):
+        methods = self.navigation_methods()
+        row = View(tag="secondary-navigation-account")
+        parent = ViewGroup(children=[row], alpha=0)
+        self.assertFalse(execute(methods["questNavigationViewVisible"], {"p0": row}, methods=methods))
+        parent.alpha = 1
+        self.assertTrue(execute(methods["questNavigationViewVisible"], {"p0": row}, methods=methods))
+        inactive = Screen(children=[parent], activity="INACTIVE")
+        self.assertFalse(execute(methods["questNavigationViewVisible"], {"p0": row}, methods=methods))
+
+    def test_modal_lookup_uses_the_native_stack_top_instead_of_retained_child_order(self):
+        methods = self.navigation_methods()
+        modal = Screen(presentation="MODAL")
+        background = Screen()
+        stack = ScreenStack(children=[modal, background], top=modal)
+        self.assertIs(execute(methods["questTopNavigationModal"], {"p0": stack}, methods=methods), modal)
+        stack.top = background
+        self.assertIsNone(execute(methods["questTopNavigationModal"], {"p0": stack}, methods=methods))
+
+    def test_settings_modal_rows_focus_without_falling_through_to_background_navigation(self):
+        methods = self.navigation_methods()
+        row = View(tag="screen-settings-item-general")
+        label = View(parent=row, clickable=False)
+        modal = Screen(presentation="MODAL", children=[row])
+        pointed = execute(methods["questPointedNavigationItem"], {"v0": label, "v4": modal}, ":parent", methods=methods)
+        self.assertIs(pointed, row)
+        anchor = View(tag="primary-navigation-account")
+        state = {"questNavigationAnchor": anchor}
+        for tag in ("screen-settings-item-general", None):
+            row.tag = tag
+            self.assertFalse(execute(methods["questHandleNavigationTouch"], {"v0": row, "p0": state},
+                                     "const/4 v1, 0x1", methods=methods))
+            self.assertTrue(row.focused)
+            self.assertIs(state["questNavigationAnchor"], anchor)
+
+    def test_modal_taps_and_back_bypass_the_background_popover_dismissal(self):
+        methods = self.navigation_methods()
+        modal = Screen(presentation="MODAL")
+        def background_popover(*_args):
+            self.fail("A foreground modal must not dismiss or refocus background navigation")
+        overrides = {"questNavigationModal": lambda _activity: modal,
+                     "questNavigationPopover": background_popover,
+                     "questDismissNavigationPopover": background_popover}
+        self.assertFalse(execute(methods["questHandleNavigationTouch"], {"p0": {}}, ":outside_check",
+                                 methods=methods, overrides=overrides))
+        class Back:
+            def getKeyCode(self):
+                return 4
+        self.assertFalse(execute(methods["questHandleNavigationBack"], {"p0": {}, "p1": Back()},
+                                 methods=methods, overrides=overrides))
 
     def test_popup_taps_focus_and_highlight_without_replacing_the_dismissal_anchor(self):
         template = (TEMPLATE.parent / "navigation-input.smali").read_text()

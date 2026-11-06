@@ -189,6 +189,15 @@ def patch_smali(tree: Path):
     hit_class, hit_method = profile.hit_test.split("->")
     get_method(find_class(tree, hit_class).read_text(),
                hit_method + "([FLandroid/view/View;Ljava/util/List;)Landroid/view/View;")
+    screen = find_class(tree, "Lcom/swmansion/rnscreens/Screen;").read_text()
+    get_method(screen, "getActivityState()Lcom/swmansion/rnscreens/Screen$ActivityState;")
+    get_method(screen, "getStackPresentation()Lcom/swmansion/rnscreens/Screen$StackPresentation;")
+    get_method(find_class(tree, "Lcom/swmansion/rnscreens/ScreenStack;").read_text(),
+               "getTopScreen()Lcom/swmansion/rnscreens/Screen;")
+    for descriptor, member in (("ActivityState", "INACTIVE"), ("StackPresentation", "PUSH")):
+        enum = find_class(tree, f"Lcom/swmansion/rnscreens/Screen${descriptor};").read_text()
+        if f".field public static final enum {member}:" not in enum:
+            raise ValueError("Unsupported native-screen modal state.")
     def input_template(path: Path) -> str:
         return (path.read_text().replace("LSf/d;", profile.playback_hook)
                 .replace("Lcom/facebook/react/uimanager/P;->c", profile.hit_test))
