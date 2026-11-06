@@ -47,7 +47,15 @@ or a complete `.apkm` / `.xapk` containing ARM64 libraries.
 | `apk_source` | Setup | `apk_url` |
 | --- | --- | --- |
 | **`manual`** (default) | [Extract your APK](#get-the-apk-from-your-quest) or supply another supported complete APK/APKM/XAPK; upload it to a file host accessible to GitHub Actions without a browser login | Paste the **direct download URL**, not a download page |
-| **`meta`** (optional, experimental) | Save your own Meta user access token as the **`META_ACCESS_TOKEN`** repository secret | Leave blank |
+| **`meta`** (optional) | Save your own Meta user access token as the **`META_ACCESS_TOKEN`** repository secret | Leave blank |
+
+The run has two jobs: **Download original APK**, then **Patch and sign APK**.
+A download or authentication failure stops in the first job, before patching.
+The original package is transferred between jobs as a short-lived Actions
+artifact, retained for one day. Only the download job receives the Meta token;
+only the patch/sign job receives signing secrets. You can rerun a failed patch
+job while the original-package artifact is available. After it expires, rerun
+both jobs to download it again.
 
 The result is **one signed, standalone APK**. It uses `com.plexapp.android.tv`,
 with its own login/settings, and can coexist with the official Plex app. Reuse the
@@ -85,12 +93,14 @@ Only this source uses the token. The downloader reads it from the secret/environ
 there is no token command-line option or workflow input, and it does not print
 authenticated URLs or Meta response bodies. Do not put the token in `apk_url`.
 
-The lookup requests the exact supported **2026.18.0 (971050431)** version of the
-official Plex app. It does **not** switch to a newer release. The downloaded APK
+The lookup selects the exact supported **2026.18.0 (971050431)** version from the
+official Plex app's public version list. It does **not** switch to a newer release. The downloaded APK
 must still pass all patcher version, code-layout, and ARM64 checks. If Meta rejects
 the token or no longer serves that build, refresh the secret or choose `manual`.
-This integration uses an [unofficial Meta API](https://github.com/ComputerElite/OculusGraphQLApiLib/blob/main/OculusGraphQLApiLib/GraphQL/GraphQLClient.cs)
-and has not yet been verified with a live user token.
+This integration uses an [unofficial Meta API](https://github.com/ComputerElite/OculusGraphQLApiLib/blob/main/OculusGraphQLApiLib/GraphQL/GraphQLClient.cs).
+The supported-version lookup and authenticated APK download have been verified
+in GitHub Actions with a live user token. The account token is sent only to
+Meta's APK download endpoint; the build lookup uses public Store metadata.
 
 ## Get the APK from your Quest
 

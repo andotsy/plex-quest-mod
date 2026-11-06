@@ -53,9 +53,10 @@ jobs:
       - name: Transfer original package to patch job
         uses: actions/upload-artifact@v7
         with:
-          name: plex-original-${{ github.run_id }}-${{ github.run_attempt }}
+          name: plex-original-${{ github.run_id }}
           path: input/plex-source.zip
           if-no-files-found: error
+          overwrite: true
           retention-days: 1
 
   patch:
@@ -81,7 +82,7 @@ jobs:
       - name: Get downloaded original package
         uses: actions/download-artifact@v8
         with:
-          name: plex-original-${{ github.run_id }}-${{ github.run_attempt }}
+          name: plex-original-${{ github.run_id }}
           path: input
       - name: Patch original APK
         run: python scripts/patch_apk.py --input input/plex-source.zip --out dist
