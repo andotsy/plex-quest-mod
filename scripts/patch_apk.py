@@ -9,7 +9,7 @@ from plex_quest.build import ROOT, build, download, tool
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Patch Plex 2026.17.0 for Quest TV/controller use.")
+    parser = argparse.ArgumentParser(description="Patch supported Plex Play/Meta Horizon APKs for Quest TV/controller use.")
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--input", type=Path, help="Locally supplied APK, APKM, or XAPK")
     source.add_argument("--url", help="Direct download URL to APK, APKM, or XAPK")

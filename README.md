@@ -3,7 +3,9 @@
 ![Quest controller controls for scrolling, seeking, play/pause, and episode-queue navigation](assets/quest-controls.png)
 
 Patch your own Plex Android APK for TV-style browsing and Quest controller input.
-Tested on Quest 3. No Plex APK is provided here.
+No Plex APK is provided here. The original Play build has been used on Quest 3.
+The Meta build has passed patching and standalone-build checks; playback on the
+headset still needs verification.
 
 During playback, the first screen-background click or assigned play/pause button
 press reveals hidden controls without changing playback. While controls are
@@ -16,17 +18,49 @@ Either thumbstick seeks ±10 seconds per jump, increasing to ±30 seconds after
 2 seconds of holding and ±60 seconds after 5 seconds. Release or change direction
 to reset the jump size.
 
-**Supported input:** Plex **2026.17.0** (version code **971050399**, Play build).
-Use a universal `.apk` or a complete `.apkm` / `.xapk` containing ARM64 libraries.
-A split `base.apk` alone is incomplete.
+**Supported inputs:**
 
-## Patch your own APK
+| Source | Plex version | Version code |
+| --- | --- | --- |
+| Meta Horizon Store (extract from your Quest) | **2026.18.0** | **971050431** |
+| Google Play | **2026.17.0** | **971050399** |
 
-1. **Fork this repository** using the **Fork** button. You need your own fork to run the GitHub Action.
-2. In **your fork**, open **Actions** and enable workflows if prompted.
+The patcher detects the build automatically. Other versions or store variants are
+rejected; a matching version name alone is not enough. Supply a standalone `.apk`
+or a complete `.apkm` / `.xapk` containing ARM64 libraries.
+
+## Get the APK from your Quest
+
+Install the supported Plex version from the Meta Horizon Store. On your computer,
+enable Quest developer mode and USB debugging, connect the headset, and authorize
+ADB in the headset. See the [Android ADB documentation](https://developer.android.com/tools/adb).
+
+You can use an APK extraction/backup tool such as SideQuest or ADB Master, or find
+the installed APK with ADB:
+
+```bash
+adb shell pm path com.plexapp.android
+```
+
+Copy the returned path without the `package:` prefix:
+
+```bash
+adb pull /data/app/.../base.apk plex-original.apk
+```
+
+The inspected Meta **2026.18.0** build is a complete standalone APK, including ARM64
+libraries, so this extracted file can be used directly. If `pm path` returns more
+than one APK, pull **all** of them, put them in a ZIP archive, and give that archive
+a `.xapk` extension. A split `base.apk` alone is incomplete.
+
+## Patch with GitHub Actions
+
+1. Upload your extracted APK (or complete APKM/XAPK) to a file host that provides a
+   **direct download URL accessible to GitHub Actions**, without a browser login.
+2. **Fork this repository**, then open **Actions** in **your fork** and enable workflows if prompted.
 3. Add the [signing secrets](#signing) to your fork. This is a one-time setup.
-4. Open **Actions → Patch Plex APK → Run workflow**. Paste a **direct download URL**
-   to your APK/APKM/XAPK file (not a download page), leave **signing enabled**, and run it.
+4. Open **Actions → Patch Plex APK → Run workflow**. Paste the direct URL to your
+   APK/APKM/XAPK file (not a download page), leave **signing enabled**, and run it.
 5. When the run finishes, download the **`plex-quest-signed-…`** artifact under **Artifacts** and unzip it.
 6. Sideload **`plex-quest-tv-aligned-signed.apk`** onto your Quest. With ADB:
 
@@ -35,47 +69,39 @@ A split `base.apk` alone is incomplete.
    ```
 
 The result is **one signed, standalone APK**. It uses `com.plexapp.android.tv`,
-with its own login/settings, and can coexist with the official Plex app.
+with its own login/settings, and can coexist with the official Plex app. Reuse the
+same signing key for updates to an existing mod installation.
 
-## Getting the source APK
+**Extraction runs on your computer; patching and signing run on GitHub.** The
+workflow cannot connect to your headset. It does not automatically download apps
+from the Meta Horizon Store or Google Play.
 
-The workflow currently needs a direct URL to a supported APK; it does not download
-apps from Google Play or the Meta Horizon Store. Google's documented APK download
-API is for [developers' own uploaded apps](https://developers.google.com/android-publisher/download-apks),
-not a general Play Store downloader.
+<details>
+<summary>Optional: patch and sign locally instead of uploading an APK</summary>
 
-You can extract an installed copy from your own Quest instead. Enable developer
-mode and USB debugging, connect ADB, then find its APK paths:
-
-```bash
-adb shell pm path com.plexapp.android
-```
-
-For each returned `package:/...` line, copy the path without the `package:` prefix:
-
-```bash
-adb pull /data/app/.../base.apk plex-original.apk
-```
-
-If there are multiple paths, pull **all** APKs, including the ARM64 configuration
-split. See the [Android ADB documentation](https://developer.android.com/tools/adb).
-For a local build, install Python dependencies and Java, then run:
+With Python and a Java JDK installed, run:
 
 ```bash
 python -m pip install -r requirements.txt
 python scripts/patch_apk.py --input plex-original.apk --out dist
-# For a split install, add --split path/to/split.apk for every configuration APK.
 ```
 
-This produces an unsigned APK; sign it before installation, or host your complete
-input privately at a direct URL and use the signed GitHub workflow above.
+For a split install, add `--split path/to/split.apk` for every configuration APK.
+Sign the output with your saved key from the [signing setup](#signing):
 
-**Meta Store compatibility is not yet supported.** The Quest-extracted Meta Store
-build inspected was **2026.18.0 (971050431)**. Its Hermes bundle still includes TV
-components such as `TVSeekbarView`, but its function table differs from the supported
-Play build. Finding those components does not establish runtime compatibility;
-this version needs a separate patch port. Extracting an APK does not bypass the
-exact-version requirement above.
+```bash
+export APK_KEY_ALIAS=plex-quest
+read -s -p "Keystore password: " APK_STORE_PASSWORD; echo
+export APK_STORE_PASSWORD
+python scripts/sign_apks.py --directory dist/unsigned --output dist/signed \
+  --keystore plex-quest.p12
+adb install -r dist/signed/plex-quest-tv-aligned-signed.apk
+```
+
+The password prompt above uses Bash. If your key has a separate key password,
+also set `APK_KEY_PASSWORD`. Keep the same keystore for future updates.
+
+</details>
 
 ## Signing
 

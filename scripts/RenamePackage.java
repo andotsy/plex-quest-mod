@@ -22,7 +22,7 @@ class RenamePackage {
             if (!ORIGINAL.equals(original) && !TARGET.equals(original)) {
                 throw new IllegalArgumentException("Unsupported package: " + original);
             }
-            if (apk.getVersionCode() != 971050399) {
+            if (apk.getVersionCode() != 971050399 && apk.getVersionCode() != 971050431) {
                 throw new IllegalArgumentException("Unsupported Plex version code.");
             }
             AndroidManifestBlock manifest = apk.getAndroidManifest();

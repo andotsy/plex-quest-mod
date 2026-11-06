@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       apk_url:
-        description: Direct URL to a complete Plex 2026.17.0 APKM/XAPK or universal APK (must include ARM64 libraries)
+        description: Direct URL to Plex 2026.18.0 Meta Horizon APK or 2026.17.0 Play APK/APKM/XAPK (must include ARM64 libraries)
         required: true
         type: string
       sign_apks:

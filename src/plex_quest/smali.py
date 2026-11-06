@@ -2,6 +2,7 @@ import re
 from pathlib import Path
 
 from . import ORIGINAL_PACKAGE, QUEST_PACKAGE
+from .profiles import PROFILES
 
 
 TEMPLATE = Path(__file__).resolve().parents[2] / "patches/quest-input.smali"
@@ -68,7 +69,7 @@ def inject_navigation_handler(text: str, descriptor: str, handler: str) -> str:
     return set_method(text, descriptor, method)
 
 
-def patch_application(text: str) -> str:
+def patch_application(text: str, mode_reads: int = 3, vizbee: bool = True) -> str:
     descriptor = "onCreate()V"
     method = get_method(text, descriptor)
     call = re.compile(
@@ -76,8 +77,8 @@ def patch_application(text: str) -> str:
         r"(?:\s|\.line \d+)*move-result (v\d+)"
     )
     method, count = call.subn(lambda m: f"const/4 {m[1]}, 0x4", method)
-    if count not in (0, 3):
-        raise ValueError(f"Expected three startup UI-mode reads; found {count}.")
+    if count not in (0, mode_reads):
+        raise ValueError(f"Expected {mode_reads} startup UI-mode reads; found {count}.")
     if count == 0:
         compact = "\n".join(line.strip() for line in method.splitlines()
                             if line.strip() and not line.strip().startswith(".line"))
@@ -85,14 +86,14 @@ def patch_application(text: str) -> str:
             r"check-cast (v\d+), Landroid/app/UiModeManager;\n"
             r"(?:(?!check-cast).+\n)*?const/4 \1, 0x4", compact
         )
-        if len(forced) != 3:
+        if len(forced) != mode_reads:
             raise ValueError("Unknown startup mode logic; refusing to guess.")
     anchor = "invoke-super {p0}, Landroid/app/Application;->onCreate()V"
     if anchor not in method:
         raise ValueError("Missing Application.onCreate anchor.")
     startup = method.find("Lcom/facebook/react/defaults/DefaultNewArchitectureEntryPoint;")
     early_vizbee = method.find("Ltv/vizbee/screen/api/Vizbee;->setApplication")
-    if early_vizbee < 0 or early_vizbee > startup:
+    if vizbee and (early_vizbee < 0 or early_vizbee > startup):
         initialization = (
             "\n\n    invoke-static {}, Ltv/vizbee/screen/api/Vizbee;->getInstance()Ltv/vizbee/screen/api/Vizbee;"
             "\n    move-result-object v0"
@@ -164,11 +165,17 @@ def patch_application_id(text: str) -> str:
     return field.sub(lambda match: match[1] + '"' + QUEST_PACKAGE + '"', text)
 
 
-def patch_smali(tree: Path) -> None:
+def patch_smali(tree: Path):
     activity = find_class(tree, "Ltv/plex/app/MainActivity;")
+    activity_source = activity.read_text()
+    profiles = [profile for profile in PROFILES if profile.marker in activity_source]
+    if len(profiles) != 1:
+        raise ValueError("Unsupported native Plex build. Supported builds: "
+                         + ", ".join(profile.label for profile in PROFILES))
+    profile = profiles[0]
     app = find_class(tree, "Ltv/plex/app/MainApplication;")
     info = find_class(tree, "Lcom/facebook/react/modules/systeminfo/AndroidInfoModule;")
-    keys = find_class(tree, "LTf/a;")
+    keys = find_class(tree, profile.key_class)
     views = find_class(tree, "Lcom/facebook/react/views/view/ReactViewGroup;")
     config = find_class(tree, "Ltv/plex/app/BuildConfig;")
     key_events = find_class(tree, "Ltv/plex/video/KeyHandler;")
@@ -176,11 +183,18 @@ def patch_smali(tree: Path) -> None:
     for direction in ("Up", "Down", "Left", "Right"):
         if f".field private trapFocus{direction}:Z" not in view_text:
             raise ValueError("Unsupported React Native focus-trap fields.")
-    if "PlexReactNative-2026.17.0 (971050399)_playRelease" not in activity.read_text():
-        raise ValueError("Only the Plex 2026.17.0 / 971050399 play build is supported.")
+    hook = find_class(tree, profile.playback_hook).read_text()
+    if ".field public static l:Lkotlin/jvm/functions/Function1;" not in hook:
+        raise ValueError("Unsupported native playback input hook.")
+    hit_class, hit_method = profile.hit_test.split("->")
+    get_method(find_class(tree, hit_class).read_text(),
+               hit_method + "([FLandroid/view/View;Ljava/util/List;)Landroid/view/View;")
+    def input_template(path: Path) -> str:
+        return (path.read_text().replace("LSf/d;", profile.playback_hook)
+                .replace("Lcom/facebook/react/uimanager/P;->c", profile.hit_test))
     # Compute every replacement before modifying the tree.
-    activity_text = patch_activity(activity.read_text(), TEMPLATE.read_text())
-    activity_text = patch_activity(activity_text, (TEMPLATE.parent / "navigation-input.smali").read_text())
+    activity_text = patch_activity(activity_source, input_template(TEMPLATE))
+    activity_text = patch_activity(activity_text, input_template(TEMPLATE.parent / "navigation-input.smali"))
     activity_text = inject_navigation_handler(activity_text, "dispatchTouchEvent(Landroid/view/MotionEvent;)Z",
                                               "questHandleNavigationTouch")
     activity_text = inject_navigation_handler(activity_text, "dispatchKeyEvent(Landroid/view/KeyEvent;)Z",
@@ -189,7 +203,7 @@ def patch_smali(tree: Path) -> None:
         key_events: patch_seek_event(key_events.read_text()),
         config: patch_application_id(config.read_text()),
         activity: activity_text,
-        app: patch_application(app.read_text()),
+        app: patch_application(app.read_text(), profile.startup_mode_reads, profile.vizbee),
         info: set_method(info.read_text(), "uiMode()Ljava/lang/String;",
                          '.method private final uiMode()Ljava/lang/String;\n'
                          '    .locals 1\n    const-string v0, "tv"\n'
@@ -201,3 +215,4 @@ def patch_smali(tree: Path) -> None:
     }
     for path, text in changes.items():
         path.write_text(text, encoding="utf-8")
+    return profile
