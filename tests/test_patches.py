@@ -287,6 +287,10 @@ class HermesIntegrationTests(unittest.TestCase):
         allowed.add(self.profile.functions["selector"][1] + 0x76)
         allowed.update(range(self.profile.functions["pointer"][1] + 0x30F + self.profile.pointer_shift, self.profile.functions["pointer"][1] + 0x3B1 + self.profile.pointer_shift))
         allowed.update(range(self.profile.functions["commit"][1] + 0xE, self.profile.functions["commit"][1] + 0x17))
+        style = self.profile.functions["details_scroller"][1] + self.profile.row_style[0]
+        allowed.update(range(style, style + 29))
+        if not self.profile.vizbee:
+            allowed.update(range(self.profile.functions["vizbee_selector"][1] + 0xB8, self.profile.functions["vizbee_selector"][1] + 0xBB))
         allowed.update(range(len(original) - 20, len(original)))
         changed = {index for index, (old, new) in enumerate(zip(original, patched)) if old != new}
         self.assertEqual(len(original), len(patched))
@@ -410,11 +414,121 @@ class HermesIntegrationTests(unittest.TestCase):
                             for ins in delta))
         self.assertEqual(sum(ins.inst.name == "Call2" and ins.original_pos == 0x4B for ins in delta), 1)
 
+    def test_receiver_uses_noop_manager_when_native_vizbee_is_absent(self):
+        with ZipFile(os.environ[self.apk_env]) as archive:
+            original = archive.read("assets/index.android.bundle")
+        reader = HBCReader()
+        reader.read_whole_file(BytesIO(patch_bundle(original)))
+        number, offset, size = self.profile.functions["vizbee_selector"]
+        handler = {ins.original_pos: ins for ins in parse_hbc_bytecode(reader.function_headers[number], reader)}
+        real, noop = object(), object()
+
+        def select_manager(is_tv):
+            # Execute Plex's actual export-selection code, with its imported
+            # managers substituted. This covers both TV and non-TV platforms.
+            registers = {0: None, 1: {"isTV": is_tv}, 2: {},
+                         9: {"default": real}, 10: {"default": noop}}
+            registers.update({i: {"default": object()} for i in range(3, 9)})
+            pc = 0xB0
+            for _ in range(40):
+                ins = handler[pc]
+                name = ins.inst.name
+                following = min((p for p in handler if p > pc), default=size)
+                if name in ("GetById", "GetByIdShort"):
+                    registers[ins.arg1] = registers[ins.arg2][reader.strings[ins.arg4]]
+                elif name == "NewObject":
+                    registers[ins.arg1] = {}
+                elif name == "PutNewOwnById":
+                    registers[ins.arg1][reader.strings[ins.arg3]] = registers[ins.arg2]
+                elif name == "PutById":
+                    registers[ins.arg1][reader.strings[ins.arg4]] = registers[ins.arg2]
+                elif name == "JmpTrue":
+                    following = pc + ins.arg1 if registers[ins.arg2] else following
+                elif name == "Jmp":
+                    following = pc + ins.arg1
+                elif name == "Ret":
+                    return registers[2]["exports"]["VizbeeManager"]
+                else:
+                    self.fail(f"Unexpected receiver-selection instruction: {ins}")
+                pc = following
+            self.fail("Receiver selector did not return its exports")
+
+        self.assertIs(select_manager(False), noop)
+        self.assertIs(select_manager(True), real if self.profile.vizbee else noop)
+        if self.profile.vizbee:
+            # Play contains the native receiver and keeps its original selector.
+            self.assertEqual(patch_bundle(original)[offset:offset + size], original[offset:offset + size])
+
+    def test_episode_row_can_grow_to_fit_its_text(self):
+        with ZipFile(os.environ[self.apk_env]) as archive:
+            patched = patch_bundle(archive.read("assets/index.android.bundle"))
+        reader = HBCReader()
+        reader.read_whole_file(BytesIO(patched))
+        handler = {ins.original_pos: ins for ins in parse_hbc_bytecode(reader.function_headers[self.profile.functions["details_scroller"][0]], reader)}
+        start = self.profile.row_style[0]
+
+        def style_for(row_id, scale):
+            registers = {1: {10: {"default": lambda value: value * scale}},
+                         16: row_id, 17: None}
+            pc = start - 10
+            for _ in range(15):
+                if pc == start + 29:
+                    return registers[7]
+                ins = handler[pc]
+                name = ins.inst.name
+                following = min(p for p in handler if p > pc)
+                if name == "LoadConstString":
+                    registers[ins.arg1] = reader.strings[ins.arg2]
+                elif name == "LoadConstUndefined":
+                    registers[ins.arg1] = None
+                elif name == "JStrictNotEqual":
+                    following = pc + ins.arg1 if registers[ins.arg2] != registers[ins.arg3] else following
+                elif name == "NewObject":
+                    registers[ins.arg1] = {}
+                elif name == "LoadFromEnvironment":
+                    registers[ins.arg1] = registers[ins.arg2][ins.arg3]
+                elif name == "GetByIdShort":
+                    registers[ins.arg1] = registers[ins.arg2][reader.strings[ins.arg4]]
+                elif name == "LoadConstInt":
+                    registers[ins.arg1] = ins.arg2
+                elif name == "Call2":
+                    registers[ins.arg1] = registers[ins.arg2](registers[ins.arg4])
+                elif name == "PutNewOwnById":
+                    registers[ins.arg1][reader.strings[ins.arg3]] = registers[ins.arg2]
+                elif name == "Jmp":
+                    following = pc + ins.arg1
+                else:
+                    self.fail(f"Unexpected episode-row style instruction: {ins}")
+                pc = following
+            self.fail("Episode-row style did not reach its original consumer")
+
+        for scale in (0.75, 1, 1.5):
+            self.assertEqual(style_for("detailsSeasonEpisodes", scale), {"minHeight": 304 * scale})
+        for row_id in ("detailsShowSeasons", "detailsShowEpisodes", "other"):
+            self.assertIsNone(style_for(row_id, 1))
+
+    def test_unknown_episode_row_sizing_is_rejected(self):
+        with ZipFile(os.environ[self.apk_env]) as archive:
+            bundle = bytearray(archive.read("assets/index.android.bundle"))
+        position = self.profile.functions["details_scroller"][1] + self.profile.row_style[0]
+        bundle[position + 13:position + 17] = (320).to_bytes(4, "little", signed=True)
+        bundle[-20:] = sha1(bundle[:-20]).digest()
+        with self.assertRaisesRegex(UnsupportedBundle, "episode-row sizing logic"):
+            patch_bundle(bytes(bundle))
+
 
 @unittest.skipUnless(os.environ.get("PLEX_TEST_META_APK"), "Meta Store APK fixture is optional and is never committed")
 class HorizonHermesIntegrationTests(HermesIntegrationTests):
     apk_env = "PLEX_TEST_META_APK"
     profile = HORIZON_2026_18
+
+    def test_unknown_receiver_selection_is_rejected(self):
+        with ZipFile(os.environ[self.apk_env]) as archive:
+            bundle = bytearray(archive.read("assets/index.android.bundle"))
+        bundle[self.profile.functions["vizbee_selector"][1] + 0xBA] = 12
+        bundle[-20:] = sha1(bundle[:-20]).digest()
+        with self.assertRaisesRegex(UnsupportedBundle, "Vizbee receiver selection branch"):
+            patch_bundle(bytes(bundle))
 
 
 @unittest.skipUnless(os.environ.get("PLEX_TEST_MERGED_APK") and os.environ.get("PLEX_TEST_RENAMED_APK"),

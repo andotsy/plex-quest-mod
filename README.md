@@ -7,6 +7,14 @@ No Plex APK is provided here. The original Play build has been used on Quest 3.
 The Meta build has passed patching and standalone-build checks; playback on the
 headset still needs verification.
 
+For the Meta build, the patch selects Plex's built-in fallback for the missing
+Vizbee casting receiver. This prevents a TV-mode crash when theme music or other
+media starts and the receiver tries to call the absent native player adapter.
+The Play build retains its native Vizbee receiver.
+
+Episode rows retain Plex's minimum loading height and grow to fit their cards,
+so episode descriptions stay above the next section's heading.
+
 During playback, the first screen-background click or assigned play/pause button
 press reveals hidden controls without changing playback. While controls are
 visible, further presses toggle play/pause. Once controls hide again, the next
