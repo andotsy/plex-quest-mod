@@ -320,6 +320,34 @@ def patch_bundle(original: bytes) -> bytes:
     # path preserve the user's existing playing/paused state.
     data[commit_offset + 0xE:commit_offset + 0x17] = commit_code
 
+    if not profile.vizbee:
+        # Horizon omits VizbeeReceiverNativeManager. Forcing TV mode otherwise
+        # selects the real receiver, whose one-second player-status poll calls
+        # missing setPlayerAdapter/setVideoStatus methods as soon as theme music
+        # starts. Select Plex's existing VizbeeNoopManager instead, covering
+        # initialization, polling, and delegate teardown together. Audio/video
+        # playback does not use this optional casting adapter.
+        vizbee_offset = expected["vizbee_selector"][1]
+        vizbee = functions["vizbee_selector"]
+        for position, operands in {
+            0xB0: ("GetById", 11, 1, 2, sid("isTV")),
+            0xBB: ("GetByIdShort", 10, 10, 3, sid("default")),
+            0xC0: ("PutNewOwnById", 1, 10, sid("VizbeeManager")),
+            0x109: ("GetByIdShort", 9, 9, 3, sid("default")),
+            0x10E: ("PutNewOwnById", 1, 9, sid("VizbeeManager")),
+        }.items():
+            ins = vizbee[position]
+            actual = (ins.inst.name, *(getattr(ins, f"arg{n}") for n in range(1, len(operands))))
+            if actual != operands:
+                raise UnsupportedBundle("Unexpected Vizbee receiver selector.")
+        replacement = bytes([jump_opcode, 3, 0])
+        current = bytes(data[vizbee_offset + 0xB8:vizbee_offset + 0xBB])
+        if current != replacement:
+            ins = vizbee[0xB8]
+            if (ins.inst.name, ins.arg1, ins.arg2) != ("JmpTrue", 81, 11):
+                raise UnsupportedBundle("Unexpected Vizbee receiver selection branch.")
+        data[vizbee_offset + 0xB8:vizbee_offset + 0xBB] = replacement
+
     data[-20:] = sha1(data[:-20]).digest()
     patched = bytes(data)
     if len(patched) != len(original):

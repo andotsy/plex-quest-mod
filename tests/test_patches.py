@@ -287,6 +287,8 @@ class HermesIntegrationTests(unittest.TestCase):
         allowed.add(self.profile.functions["selector"][1] + 0x76)
         allowed.update(range(self.profile.functions["pointer"][1] + 0x30F + self.profile.pointer_shift, self.profile.functions["pointer"][1] + 0x3B1 + self.profile.pointer_shift))
         allowed.update(range(self.profile.functions["commit"][1] + 0xE, self.profile.functions["commit"][1] + 0x17))
+        if not self.profile.vizbee:
+            allowed.update(range(self.profile.functions["vizbee_selector"][1] + 0xB8, self.profile.functions["vizbee_selector"][1] + 0xBB))
         allowed.update(range(len(original) - 20, len(original)))
         changed = {index for index, (old, new) in enumerate(zip(original, patched)) if old != new}
         self.assertEqual(len(original), len(patched))
@@ -410,11 +412,64 @@ class HermesIntegrationTests(unittest.TestCase):
                             for ins in delta))
         self.assertEqual(sum(ins.inst.name == "Call2" and ins.original_pos == 0x4B for ins in delta), 1)
 
+    def test_receiver_uses_noop_manager_when_native_vizbee_is_absent(self):
+        with ZipFile(os.environ[self.apk_env]) as archive:
+            original = archive.read("assets/index.android.bundle")
+        reader = HBCReader()
+        reader.read_whole_file(BytesIO(patch_bundle(original)))
+        number, offset, size = self.profile.functions["vizbee_selector"]
+        handler = {ins.original_pos: ins for ins in parse_hbc_bytecode(reader.function_headers[number], reader)}
+        real, noop = object(), object()
+
+        def select_manager(is_tv):
+            # Execute Plex's actual export-selection code, with its imported
+            # managers substituted. This covers both TV and non-TV platforms.
+            registers = {0: None, 1: {"isTV": is_tv}, 2: {},
+                         9: {"default": real}, 10: {"default": noop}}
+            registers.update({i: {"default": object()} for i in range(3, 9)})
+            pc = 0xB0
+            for _ in range(40):
+                ins = handler[pc]
+                name = ins.inst.name
+                following = min((p for p in handler if p > pc), default=size)
+                if name in ("GetById", "GetByIdShort"):
+                    registers[ins.arg1] = registers[ins.arg2][reader.strings[ins.arg4]]
+                elif name == "NewObject":
+                    registers[ins.arg1] = {}
+                elif name == "PutNewOwnById":
+                    registers[ins.arg1][reader.strings[ins.arg3]] = registers[ins.arg2]
+                elif name == "PutById":
+                    registers[ins.arg1][reader.strings[ins.arg4]] = registers[ins.arg2]
+                elif name == "JmpTrue":
+                    following = pc + ins.arg1 if registers[ins.arg2] else following
+                elif name == "Jmp":
+                    following = pc + ins.arg1
+                elif name == "Ret":
+                    return registers[2]["exports"]["VizbeeManager"]
+                else:
+                    self.fail(f"Unexpected receiver-selection instruction: {ins}")
+                pc = following
+            self.fail("Receiver selector did not return its exports")
+
+        self.assertIs(select_manager(False), noop)
+        self.assertIs(select_manager(True), real if self.profile.vizbee else noop)
+        if self.profile.vizbee:
+            # Play contains the native receiver and keeps its original selector.
+            self.assertEqual(patch_bundle(original)[offset:offset + size], original[offset:offset + size])
+
 
 @unittest.skipUnless(os.environ.get("PLEX_TEST_META_APK"), "Meta Store APK fixture is optional and is never committed")
 class HorizonHermesIntegrationTests(HermesIntegrationTests):
     apk_env = "PLEX_TEST_META_APK"
     profile = HORIZON_2026_18
+
+    def test_unknown_receiver_selection_is_rejected(self):
+        with ZipFile(os.environ[self.apk_env]) as archive:
+            bundle = bytearray(archive.read("assets/index.android.bundle"))
+        bundle[self.profile.functions["vizbee_selector"][1] + 0xBA] = 12
+        bundle[-20:] = sha1(bundle[:-20]).digest()
+        with self.assertRaisesRegex(UnsupportedBundle, "Vizbee receiver selection branch"):
+            patch_bundle(bytes(bundle))
 
 
 @unittest.skipUnless(os.environ.get("PLEX_TEST_MERGED_APK") and os.environ.get("PLEX_TEST_RENAMED_APK"),
