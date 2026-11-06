@@ -9,6 +9,8 @@ from pathlib import Path
 from zipfile import ZipFile
 from unittest.mock import patch
 
+from navigation_fixture import View, execute
+
 from hermes_dec.parsers.hbc_bytecode_parser import parse_hbc_bytecode
 from hermes_dec.parsers.hbc_file_parser import HBCReader
 
@@ -19,6 +21,43 @@ from plex_quest.smali import TEMPLATE, get_method, inject_navigation_handler, pa
 
 
 class NativePatchTests(unittest.TestCase):
+    def test_pointer_finds_enabled_popup_rows_through_their_label_children(self):
+        template = (TEMPLATE.parent / "navigation-input.smali").read_text()
+        method = get_method(template, "questPointedNavigationItem(Landroid/view/MotionEvent;)Landroid/view/View;")
+        for tag in ("primary-navigation-account", "secondary-navigation-servers",
+                    "secondary-navigation-library-movies", "secondary-navigation-account-settings"):
+            with self.subTest(tag=tag):
+                row = View(tag=tag)
+                label = View(parent=row, clickable=False)
+                self.assertIs(execute(method, {"v0": label}, ":parent"), row)
+        for tag, enabled in (("secondary-navigation-disabled", False),
+                             ("secondary-navigation", True), ("media-card", True)):
+            with self.subTest(tag=tag):
+                self.assertIsNone(execute(method, {"v0": View(tag=tag, enabled=enabled)}, ":parent"))
+
+    def test_popup_taps_focus_and_highlight_without_replacing_the_dismissal_anchor(self):
+        template = (TEMPLATE.parent / "navigation-input.smali").read_text()
+        method = get_method(template, "questHandleNavigationTouch(Landroid/view/MotionEvent;)Z")
+        anchor = View(tag="primary-navigation-account", focused=True)
+        state = {"questNavigationAnchor": anchor}
+        for tag in ("secondary-navigation-servers", "secondary-navigation-library-movies",
+                    "secondary-navigation-account-settings"):
+            row = View(tag=tag)
+            for _ in range(2):
+                # Begin after Android's hit-test returned this row. The real
+                # template must focus it and preserve the normal touch event.
+                consumed = execute(method, {"v0": row, "p0": state}, "const/4 v1, 0x1")
+                self.assertFalse(consumed)
+                self.assertTrue(row.touch_focusable)
+                self.assertTrue(row.focused)
+                self.assertIs(state["questNavigationAnchor"], anchor)
+            self.assertEqual(row.focus_events, 1)
+            self.assertEqual(row.clears, 0)
+        primary = View(tag="primary-navigation-libraries", focused=True)
+        self.assertFalse(execute(method, {"v0": primary, "p0": state}, "const/4 v1, 0x1"))
+        self.assertIs(state["questNavigationAnchor"], primary)
+        self.assertEqual(primary.clears, 1)
+
     def test_queued_seek_events_capture_their_own_hold_duration(self):
         original = (
             '.method public final emitOnKeyEvent(Landroid/view/KeyEvent;)V\n    .locals 3\n'

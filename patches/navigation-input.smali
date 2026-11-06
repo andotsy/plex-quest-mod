@@ -63,9 +63,17 @@
     check-cast v1, Ljava/lang/String;
     const-string v2, "primary-navigation-"
     invoke-virtual {v1, v2}, Ljava/lang/String;->startsWith(Ljava/lang/String;)Z
+    move-result v2
+    if-nez v2, :navigation_item
+    const-string v2, "secondary-navigation-"
+    invoke-virtual {v1, v2}, Ljava/lang/String;->startsWith(Ljava/lang/String;)Z
+    move-result v2
+    if-eqz v2, :next
+    :navigation_item
+    invoke-virtual {v0}, Landroid/view/View;->isClickable()Z
     move-result v1
     if-eqz v1, :next
-    invoke-virtual {v0}, Landroid/view/View;->isClickable()Z
+    invoke-virtual {v0}, Landroid/view/View;->isEnabled()Z
     move-result v1
     if-nez v1, :found
     :next
@@ -115,10 +123,21 @@
     invoke-direct {p0, p1}, Ltv/plex/app/MainActivity;->questPointedNavigationItem(Landroid/view/MotionEvent;)Landroid/view/View;
     move-result-object v0
     if-eqz v0, :outside_check
-    iput-object v0, p0, Ltv/plex/app/MainActivity;->questNavigationAnchor:Landroid/view/View;
     const/4 v1, 0x1
     invoke-virtual {v0, v1}, Landroid/view/View;->setFocusableInTouchMode(Z)V
+    # Submenus also need native focus for Plex's TV selection callbacks. Keep
+    # the top-level anchor for dismissal, and avoid refocusing an already
+    # focused submenu item (which can recreate its child menu during a tap).
+    invoke-virtual {v0}, Landroid/view/View;->getTag()Ljava/lang/Object;
+    move-result-object v2
+    check-cast v2, Ljava/lang/String;
+    const-string v3, "primary-navigation-"
+    invoke-virtual {v2, v3}, Ljava/lang/String;->startsWith(Ljava/lang/String;)Z
+    move-result v2
+    if-eqz v2, :focus_item
+    iput-object v0, p0, Ltv/plex/app/MainActivity;->questNavigationAnchor:Landroid/view/View;
     invoke-virtual {v0}, Landroid/view/View;->clearFocus()V
+    :focus_item
     invoke-virtual {v0}, Landroid/view/View;->requestFocusFromTouch()Z
     goto :normal_touch
 

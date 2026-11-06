@@ -15,6 +15,9 @@ The Play build retains its native Vizbee receiver.
 Episode rows retain Plex's minimum loading height and grow to fit their cards,
 so episode descriptions stay above the next section's heading.
 
+Tap a top navigation button or popup row to move TV focus to it. Popup rows get
+the normal focused highlight and activate through Plex's existing menu handlers.
+
 During playback, the first screen-background click or assigned play/pause button
 press reveals hidden controls without changing playback. While controls are
 visible, further presses toggle play/pause. Once controls hide again, the next
