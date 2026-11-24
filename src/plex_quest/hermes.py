@@ -1,10 +1,12 @@
-from hashlib import sha1
+from dataclasses import replace
+from hashlib import sha1, sha256
 from io import BytesIO
+import json
 
 from hermes_dec.parsers.hbc_bytecode_parser import parse_hbc_bytecode
 from hermes_dec.parsers.hbc_file_parser import HBCReader
 
-from .profiles import PROFILES, BuildProfile
+from .profiles import HORIZON_2026_18, PROFILES, BuildProfile
 
 
 class UnsupportedBundle(ValueError):
@@ -24,17 +26,91 @@ def identify_bundle(reader: HBCReader) -> BuildProfile:
                             + ", ".join(profile.label for profile in PROFILES))
 
 
+def _read_bundle(original: bytes) -> HBCReader:
+    reader = HBCReader()
+    try:
+        reader.read_whole_file(BytesIO(original))
+    except Exception as error:
+        raise UnsupportedBundle("Could not read the Plex Hermes bundle.") from error
+    return reader
+
+
+def function_fingerprint(reader: HBCReader, header) -> str | None:
+    """Compare instructions while allowing string and function tables to move."""
+    instructions = []
+    for ins in parse_hbc_bytecode(header, reader):
+        # These instructions refer to external data that this fingerprint does
+        # not compare. The reviewed Horizon functions do not use them.
+        if "WithBuffer" in ins.inst.name or ins.inst.name == "SwitchImm":
+            return None
+        operands = []
+        for n, op in enumerate(ins.inst.operands, 1):
+            value = getattr(ins, f"arg{n}")
+            kind = op.operand_meaning.name if op.operand_meaning else None
+            if kind == "string_id":
+                value = reader.strings[value]
+            elif kind == "function_id":
+                target = reader.function_headers[value]
+                value = [reader.strings[target.functionName], target.paramCount, target.bytecodeSizeInBytes]
+            elif kind is not None:
+                return None
+            operands.append(value)
+        instructions.append([ins.inst.name, operands])
+    signature = [header.paramCount, header.frameSize, header.environmentSize, instructions]
+    return sha256(json.dumps(signature, ensure_ascii=True, separators=(",", ":")).encode()).hexdigest()
+
+
+# Fingerprints of the unmodified 2026.18.0 functions. Function size and name
+# narrow the search; an unambiguous hash of all instructions is still required.
+HORIZON_FINGERPRINTS = {
+    "clear_seek": ("", "2c7e829301405cd0066180b4e3d35b8857b456b7a130265778a01ff4679a8780"),
+    "seek_delta": ("doSeek", "56113e5215ff526960ee44b593df959b65e42f6c7f67ebe37d2157293aa38445"),
+    "keys": ("?anon_0_", "24076e0f32a7693dfcf00cb7c89c7760f3cdbbba35aa1121d53930d213489890"),
+    "selector": ("", "c5e9bcbc657ec989a4732c62fb4e2566e9298031feea3f44146fdcc8ab18cad6"),
+    "pointer": ("ResponsiveSeekbarView", "b3c6a41f638095f82399fd6fb40ffc785dedd3f9b6e78bf3c8e36e500fb9393a"),
+    "commit": ("t0", "9072682991962268a605326b424f19b20cfea5a0828f44a48f7d03196713c772"),
+    "deck_exit": ("t8", "dd2a01f0927ae755eb9df94c201d7cbdb4aecf4f433f93803993115e3a2dcbb2"),
+    "details_inner": ("DetailsRowInternal", "5218d031cebada63e6223177c1e4ac0e2ff13bce4d08355710dc1f15c022184b"),
+    "details_row": ("DetailsChildrenRow", "c1ee1dbf2137ea9a7be11479ac3f0a90cc3397e6192237690b04dd519a9d9565"),
+    "details_scroller": ("LumaDetailsChildrenRowScroller", "42abc23e617b6d108535a121a769a7f5e26e89563c6dbc729dc62499d81baae1"),
+    "vizbee_selector": ("", "11a69b324da7ab14376b5c23a08fbb81437cca1c3a1766b24d773e2389091e17"),
+}
+
+
+def compatible_horizon_layout(reader: HBCReader) -> BuildProfile:
+    if reader.header.version != 96:
+        raise UnsupportedBundle("The latest Horizon build uses a different Hermes bytecode version.")
+    candidates = {}
+    for number, header in enumerate(reader.function_headers):
+        key = (reader.strings[header.functionName], header.bytecodeSizeInBytes)
+        candidates.setdefault(key, []).append((number, header))
+    functions = {}
+    for role, (name, fingerprint) in HORIZON_FINGERPRINTS.items():
+        size = HORIZON_2026_18.functions[role][2]
+        matches = [(number, header.offset, size) for number, header in candidates.get((name, size), ())
+                   if function_fingerprint(reader, header) == fingerprint]
+        if len(matches) != 1:
+            raise UnsupportedBundle(f"Hermes target {role} has {len(matches)} matching functions (expected one).")
+        functions[role] = matches[0]
+    return replace(HORIZON_2026_18, functions=functions)
+
+
 def bundle_profile(original: bytes) -> BuildProfile:
-    reader = HBCReader()
-    reader.read_whole_file(BytesIO(original))
-    return identify_bundle(reader)
+    return identify_bundle(_read_bundle(original))
 
 
-def patch_bundle(original: bytes) -> bytes:
+def build_bundle_profile(original: bytes) -> BuildProfile:
+    reader = _read_bundle(original)
+    try:
+        return identify_bundle(reader)
+    except UnsupportedBundle:
+        return compatible_horizon_layout(reader)
+
+
+def patch_bundle(original: bytes, *, profile: BuildProfile | None = None) -> bytes:
     """Apply fixed-size patches; reject unknown Hermes layouts before writing."""
-    reader = HBCReader()
-    reader.read_whole_file(BytesIO(original))
-    profile = identify_bundle(reader)
+    reader = _read_bundle(original)
+    profile = profile or identify_bundle(reader)
     expected = profile.functions
     strings = {value: index for index, value in enumerate(reader.strings)}
     def sid(name: str) -> int:

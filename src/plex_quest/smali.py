@@ -1,8 +1,9 @@
 import re
+from dataclasses import replace
 from pathlib import Path
 
 from . import ORIGINAL_PACKAGE, QUEST_PACKAGE
-from .profiles import PROFILES
+from .profiles import BuildProfile, HORIZON_2026_18, PROFILES
 
 
 TEMPLATE = Path(__file__).resolve().parents[2] / "patches/quest-input.smali"
@@ -165,14 +166,23 @@ def patch_application_id(text: str) -> str:
     return field.sub(lambda match: match[1] + '"' + QUEST_PACKAGE + '"', text)
 
 
-def patch_smali(tree: Path):
+def patch_smali(tree: Path, layout: BuildProfile):
     activity = find_class(tree, "Ltv/plex/app/MainActivity;")
     activity_source = activity.read_text()
-    profiles = [profile for profile in PROFILES if profile.marker in activity_source]
-    if len(profiles) != 1:
-        raise ValueError("Unsupported native Plex build. Supported builds: "
-                         + ", ".join(profile.label for profile in PROFILES))
-    profile = profiles[0]
+    known = next((profile for profile in PROFILES if profile.marker in activity_source), None)
+    if known is not None:
+        if known != layout:
+            raise ValueError("Native code and Hermes bundle belong to different Plex builds.")
+        profile = known
+    else:
+        markers = set(re.findall(r'PlexReactNative-(\d+\.\d+\.\d+) \((\d{1,10})\)_horizonRelease\b',
+                                 activity_source))
+        if layout.flavor != "horizon" or len(markers) != 1:
+            raise ValueError("Cannot identify a compatible native Plex Horizon build.")
+        version, code = markers.pop()
+        if int(code) <= HORIZON_2026_18.version_code:
+            raise ValueError("Unknown native Plex Horizon version.")
+        profile = replace(layout, version=version, version_code=int(code))
     app = find_class(tree, "Ltv/plex/app/MainApplication;")
     info = find_class(tree, "Lcom/facebook/react/modules/systeminfo/AndroidInfoModule;")
     keys = find_class(tree, profile.key_class)
@@ -180,6 +190,8 @@ def patch_smali(tree: Path):
     config = find_class(tree, "Ltv/plex/app/BuildConfig;")
     key_events = find_class(tree, "Ltv/plex/video/KeyHandler;")
     view_text = views.read_text()
+    info_text = info.read_text()
+    get_method(info_text, "uiMode()Ljava/lang/String;")
     for direction in ("Up", "Down", "Left", "Right"):
         if f".field private trapFocus{direction}:Z" not in view_text:
             raise ValueError("Unsupported React Native focus-trap fields.")
@@ -213,7 +225,7 @@ def patch_smali(tree: Path):
         config: patch_application_id(config.read_text()),
         activity: activity_text,
         app: patch_application(app.read_text(), profile.startup_mode_reads, profile.vizbee),
-        info: set_method(info.read_text(), "uiMode()Ljava/lang/String;",
+        info: set_method(info_text, "uiMode()Ljava/lang/String;",
                          '.method private final uiMode()Ljava/lang/String;\n'
                          '    .locals 1\n    const-string v0, "tv"\n'
                          '    return-object v0\n.end method'),

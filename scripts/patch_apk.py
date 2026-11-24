@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from plex_quest.build import ROOT, build, download, tool
+from plex_quest.build import ROOT, build, download, probe_horizon_apk, tool
 from plex_quest.meta import download_meta
 
 
@@ -15,7 +15,7 @@ def main(argv=None):
     source.add_argument("--input", type=Path, help="Locally supplied APK, APKM, or XAPK")
     source.add_argument("--url", help="Direct download URL to APK, APKM, or XAPK")
     source.add_argument("--meta", action="store_true",
-                        help="Download supported Plex from Meta using the META_ACCESS_TOKEN environment variable")
+                        help="Probe the latest Plex from Meta and fall back to a reviewed build (requires META_ACCESS_TOKEN)")
     parser.add_argument("--out", type=Path, default=ROOT / "dist")
     parser.add_argument("--apktool", type=Path, help="Apktool 3.0.3 JAR; downloaded/verified if omitted")
     parser.add_argument("--editor", type=Path, help="APKEditor 1.4.9 JAR; downloaded/verified if omitted")
@@ -27,7 +27,8 @@ def main(argv=None):
         parser.error("The manual APK URL is required when using --url.")
     source_path = args.input
     if args.meta:
-        source_path = download_meta(ROOT / ".work/downloaded-meta.apk")
+        source_path = download_meta(ROOT / ".work/downloaded-meta.apk",
+                                    probe=lambda apk: probe_horizon_apk(apk, tool("apktool", args.apktool), args.docker))
     elif args.url:
         source_path = download(args.url, ROOT / ".work/downloaded-package.zip")
     build(source_path, args.out, tool("apktool", args.apktool), args.docker,

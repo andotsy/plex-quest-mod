@@ -38,9 +38,10 @@ to reset the jump size.
 | Meta Horizon Store (token or Quest extraction) | **2026.18.0** | **971050431** |
 | Google Play | **2026.17.0** | **971050399** |
 
-The patcher detects the build automatically. Other versions or store variants are
-rejected; a matching version name alone is not enough. Supply a standalone `.apk`
-or a complete `.apkm` / `.xapk` containing ARM64 libraries.
+These are the reviewed builds. Newer Horizon releases can also pass if their
+Hermes patch targets match the reviewed instructions and their native patch
+checks pass. Supply a standalone `.apk` or a complete `.apkm` / `.xapk`
+containing ARM64 libraries.
 
 ## Patch with GitHub Actions
 
@@ -62,7 +63,7 @@ or a complete `.apkm` / `.xapk` containing ARM64 libraries.
 | **`manual`** (default) | [Extract your APK](#get-the-apk-from-your-quest) or supply another supported complete APK/APKM/XAPK; upload it to a file host accessible to GitHub Actions without a browser login | Paste the **direct download URL**, not a download page |
 | **`meta`** (optional) | Save your own Meta user access token as the **`META_ACCESS_TOKEN`** repository secret | Leave blank |
 
-The run has two jobs: **Download original APK**, then **Patch and sign APK**.
+The run has two jobs: **Download and check original APK**, then **Patch and sign APK**.
 A download or authentication failure stops in the first job, before patching.
 The original package is transferred between jobs as a short-lived Actions
 artifact, retained for one day. Only the download job receives the Meta token;
@@ -91,8 +92,7 @@ extracting or hosting an APK yourself. Set it up in **your own fork**:
 5. In your GitHub fork, open **Settings → Secrets and variables → Actions →
    New repository secret**. Name it **`META_ACCESS_TOKEN`** and paste the token
    into its value.
-6. Run the workflow with **`apk_source: meta`** and **`apk_url` empty**. While this
-   change is still in a pull request, select the PR's branch in **Run workflow**.
+6. Run the workflow with **`apk_source: meta`** and **`apk_url` empty**.
 
 If the dashboard does not offer token generation, an alternative documented by
 [BSManager](https://github.com/Zagrios/bs-manager/wiki/How-to-obtain-your-Oculus-Token)
@@ -106,10 +106,13 @@ Only this source uses the token. The downloader reads it from the secret/environ
 there is no token command-line option or workflow input, and it does not print
 authenticated URLs or Meta response bodies. Do not put the token in `apk_url`.
 
-The lookup selects the exact supported **2026.18.0 (971050431)** version from the
-official Plex app's public version list. It does **not** switch to a newer release. The downloaded APK
-must still pass all patcher version, code-layout, and ARM64 checks. If Meta rejects
-the token or no longer serves that build, refresh the secret or choose `manual`.
+The workflow downloads the newest **LIVE** release listed for Plex and checks its
+ARM64 libraries, Hermes bytecode, and native patch targets. If the candidate
+passes, it is sent to the patch job. If its code or APK layout is incompatible,
+the workflow logs the reason and downloads the newest reviewed version still
+listed by Meta, currently **2026.18.0 (971050431)**. A successful probe checks code
+compatibility. Playback on that release still needs headset testing.
+If Meta rejects the token, refresh the secret or choose `manual`.
 This integration uses an [unofficial Meta API](https://github.com/ComputerElite/OculusGraphQLApiLib/blob/main/OculusGraphQLApiLib/GraphQL/GraphQLClient.cs).
 The supported-version lookup and authenticated APK download have been verified
 in GitHub Actions with a live user token. The account token is sent only to

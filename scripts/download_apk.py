@@ -14,7 +14,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--url", help="Direct URL to your APK/APKM/XAPK")
-    source.add_argument("--meta", action="store_true", help="Use the META_ACCESS_TOKEN environment variable")
+    source.add_argument("--meta", action="store_true",
+                        help="Probe the latest Meta release before falling back (requires META_ACCESS_TOKEN and Java)")
     parser.add_argument("--out", type=Path, required=True, help="Destination for the original package")
     args = parser.parse_args(argv)
     if args.url is not None and not args.url.strip():

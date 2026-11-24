@@ -4,6 +4,7 @@ import os
 import tempfile
 import traceback
 import unittest
+from dataclasses import replace
 from io import BytesIO, StringIO
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -13,7 +14,7 @@ from zipfile import ZipFile
 from contextlib import redirect_stderr
 from unittest.mock import patch
 
-from plex_quest.build import ROOT
+from plex_quest.build import ROOT, UnsupportedAPK
 from plex_quest.meta import (
     DOWNLOAD_URL, GRAPHQL_URL, PLEX_META_APP_ID, MetaDownloadError,
     MetaRedirectHandler, STORE_METADATA_TOKEN, VERSION_LIST_DOCUMENT, download_meta,
@@ -28,6 +29,10 @@ def binary(**changes):
     return {"id": "1234567890123456", "__typename": "AndroidBinary",
             "version": HORIZON_2026_18.version,
             "version_code": str(HORIZON_2026_18.version_code), **changes}
+
+
+def live_binary(**changes):
+    return binary(binary_release_channels={"nodes": [{"channel_name": "LIVE"}]}, **changes)
 
 
 def lookup(*binaries):
@@ -89,17 +94,59 @@ class MetaDownloadTests(unittest.TestCase):
         network.assert_not_called()
         self.assertFalse(self.destination.exists())
 
-    def test_missing_wrong_or_ambiguous_build_never_downloads_latest(self):
+    def test_missing_wrong_or_ambiguous_reviewed_build_fails_without_live_candidate(self):
         responses = ((), (binary(version_code="971050999"),),
                      (binary(__typename="RiftBinary"),),
                      (binary(id="not-a-binary-id"),),
                      (binary(), binary(id="9876543210987654")))
         for entries in responses:
             with self.subTest(entries=entries), patch("plex_quest.meta.OPENER.open", return_value=lookup(*entries)) as network:
-                with self.assertRaisesRegex(MetaDownloadError, "newer releases are not substituted"):
+                with self.assertRaisesRegex(MetaDownloadError, "unique reviewed fallback"):
                     download_meta(self.destination)
                 self.assertEqual(network.call_count, 1)
                 self.assertFalse(self.destination.exists())
+
+    def test_probes_newest_live_apk_and_keeps_it_when_compatible(self):
+        latest = live_binary(id="42", version="2026.22.0", version_code=971050581)
+        beta = binary(id="43", version="2026.23.0", version_code=971050600,
+                      binary_release_channels={"nodes": [{"channel_name": "BETA"}]})
+        payload = apk_bytes()
+        def probe(path):
+            self.assertEqual(path.read_bytes(), payload)
+            self.assertFalse(self.destination.exists())
+            return replace(HORIZON_2026_18, version="2026.22.0", version_code=971050581)
+        with patch("plex_quest.meta.OPENER.open", side_effect=[
+            lookup(live_binary(), beta, latest), BytesIO(payload)
+        ]) as network:
+            self.assertEqual(download_meta(self.destination, probe=probe), self.destination)
+        self.assertEqual(self.destination.read_bytes(), payload)
+        self.assertEqual(parse_qs(urlparse(network.call_args.args[0].full_url).query)["id"], ["42"])
+
+    def test_probe_rejection_downloads_reviewed_fallback(self):
+        latest = live_binary(id="42", version="2026.22.0", version_code=971050581)
+        payload = apk_bytes()
+        def probe(_path):
+            raise UnsupportedAPK("Missing patch targets.")
+        with patch("plex_quest.meta.OPENER.open", side_effect=[
+            lookup(latest, binary()), BytesIO(payload), BytesIO(payload)
+        ]) as network:
+            download_meta(self.destination, probe=probe)
+        submitted = [parse_qs(urlparse(call.args[0].full_url).query)["id"][0]
+                     for call in network.call_args_list[1:]]
+        self.assertEqual(submitted, ["42", binary()["id"]])
+        self.assertEqual(self.destination.read_bytes(), payload)
+        self.assertEqual(list(self.destination.parent.iterdir()), [self.destination])
+
+    def test_live_download_auth_error_does_not_fall_back(self):
+        latest = live_binary(id="42", version="2026.22.0", version_code=971050581)
+        url = DOWNLOAD_URL + "?" + urlencode({"access_token": TOKEN})
+        error = HTTPError(url, 403, TOKEN, {}, BytesIO(TOKEN.encode()))
+        with patch("plex_quest.meta.OPENER.open", side_effect=[lookup(latest, binary()), error]) as network:
+            with self.assertRaisesRegex(MetaDownloadError, "Refresh META_ACCESS_TOKEN") as caught:
+                download_meta(self.destination)
+        self.assert_sanitized(caught.exception)
+        self.assertEqual(network.call_count, 2)
+        self.assertFalse(self.destination.exists())
 
     def test_graphql_errors_and_malformed_responses_do_not_echo_response_or_token(self):
         responses = [json.dumps({"errors": [{"message": TOKEN}]}).encode(),
@@ -130,7 +177,7 @@ class MetaDownloadTests(unittest.TestCase):
         self.destination.write_bytes(b"previous input")
         for response in (("<html>" + TOKEN + "</html>").encode(), apk_bytes(native=False)):
             with self.subTest(length=len(response)), patch("plex_quest.meta.OPENER.open", side_effect=[lookup(binary()), BytesIO(response)]):
-                with self.assertRaisesRegex(MetaDownloadError, "complete ARM64") as caught:
+                with self.assertRaisesRegex(MetaDownloadError, "complete ARM64|reviewed fallback is incomplete") as caught:
                     download_meta(self.destination)
                 self.assert_sanitized(caught.exception)
                 self.assertEqual(self.destination.read_bytes(), b"previous input")
@@ -181,7 +228,8 @@ class SourceSelectionTests(unittest.TestCase):
                 patch.object(self.cli, "download") as manual, patch.object(self.cli, "build") as build, \
                 patch.object(self.cli, "tool", return_value=Path("tool.jar")):
             self.cli.main(["--meta"])
-            meta.assert_called_once_with(ROOT / ".work/downloaded-meta.apk")
+            self.assertEqual(meta.call_args.args, (ROOT / ".work/downloaded-meta.apk",))
+            self.assertTrue(callable(meta.call_args.kwargs["probe"]))
             manual.assert_not_called()
             self.assertEqual(build.call_args.args[0], Path("meta.apk"))
 

@@ -26,9 +26,9 @@ permissions:
 
 jobs:
   download:
-    name: Download original APK
+    name: Download and check original APK
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -45,7 +45,12 @@ jobs:
         env:
           APK_URL: ${{ inputs.apk_url }}
         run: python scripts/download_apk.py --url "$APK_URL" --out input/plex-source.zip
-      - name: Download supported Plex from Meta
+      - uses: actions/setup-java@v6
+        if: ${{ inputs.apk_source == 'meta' }}
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Probe latest Plex from Meta and select APK
         if: ${{ inputs.apk_source == 'meta' }}
         env:
           META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}

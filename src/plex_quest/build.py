@@ -10,10 +10,11 @@ from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
-from zipfile import ZipFile
+from zipfile import BadZipFile, ZipFile
 
 from . import ORIGINAL_PACKAGE, QUEST_PACKAGE, VERSION
-from .hermes import bundle_profile, patch_bundle
+from .hermes import _read_bundle, build_bundle_profile, compatible_horizon_layout, patch_bundle
+from .profiles import HORIZON_2026_18, BuildProfile
 from .smali import patch_smali
 
 
@@ -138,6 +139,42 @@ def require_native_libraries(apks: list[Path]) -> None:
                          "a split base.apk alone is incomplete.")
 
 
+class UnsupportedAPK(ValueError):
+    """An APK whose structure or patch targets do not pass compatibility checks."""
+
+
+def prepare_patches(base: Path, work: Path, apktool: Path, docker: bool) -> tuple[BuildProfile, bytes, dict]:
+    """Run the same Hermes and native checks for probing and building."""
+    try:
+        with ZipFile(base) as archive:
+            original_bundle = archive.read("assets/index.android.bundle")
+            preserved = {name: archive.read(name) for name in ("AndroidManifest.xml", "resources.arsc")}
+        layout = build_bundle_profile(original_bundle)
+        bundle = patch_bundle(original_bundle, profile=layout)
+    except (ValueError, KeyError, IndexError, OverflowError, AssertionError, BadZipFile, struct.error) as error:
+        raise UnsupportedAPK(f"Hermes/APK check failed: {error}") from error
+    tree = work / "decoded"
+    java_jar(apktool, ["d", "-r", str(base), "-o", str(tree)], {work: "/work"}, docker)
+    try:
+        profile = patch_smali(tree, layout)
+        if profile.version_code != layout.version_code and layout == HORIZON_2026_18:
+            # A new version may retain even the old function IDs and offsets.
+            # Require the stronger fingerprint check for that version too.
+            compatible_horizon_layout(_read_bundle(original_bundle))
+    except (ValueError, IndexError, KeyError) as error:
+        raise UnsupportedAPK(f"Native/layout check failed: {error}") from error
+    return profile, bundle, preserved
+
+
+def probe_horizon_apk(source: Path, apktool: Path, docker: bool = False) -> BuildProfile:
+    """Check a complete Meta APK without assembling, repackaging, or signing it."""
+    with tempfile.TemporaryDirectory(prefix="meta-probe-") as temporary:
+        profile, _, _ = prepare_patches(source.resolve(), Path(temporary), apktool, docker)
+    if profile.flavor != "horizon":
+        raise UnsupportedAPK("Expected a Plex Horizon APK.")
+    return profile
+
+
 def masked_resource_package_names(data: bytes) -> bytes:
     """Mask only fixed-width package names, leaving all resource IDs/values/configs comparable."""
     if len(data) < 12:
@@ -210,16 +247,9 @@ def build(source: Path, output: Path, apktool: Path, docker: bool = False,
                 if "AndroidManifest.xml" not in archive.namelist() or "assets/index.android.bundle" in archive.namelist():
                     raise ValueError("--split inputs must be configuration APKs, not another base APK.")
         require_native_libraries([base, *splits])
-        with ZipFile(base) as archive:
-            original_bundle = archive.read("assets/index.android.bundle")
-            profile = bundle_profile(original_bundle)
-            print(f"Detected supported Plex build: {profile.label}", flush=True)
-            bundle = patch_bundle(original_bundle)
-            preserved = {name: archive.read(name) for name in ("AndroidManifest.xml", "resources.arsc")}
+        profile, bundle, preserved = prepare_patches(base, work, apktool, docker)
+        print(f"Detected compatible Plex build: {profile.label}", flush=True)
         tree = work / "decoded"
-        java_jar(apktool, ["d", "-r", str(base), "-o", str(tree)], {work: "/work"}, docker)
-        if patch_smali(tree) != profile:
-            raise ValueError("Native code and Hermes bundle belong to different Plex builds.")
         (tree / "assets/index.android.bundle").write_bytes(bundle)
         built = work / "base-patched.apk"
         java_jar(apktool, ["b", str(tree), "-o", str(built)], {work: "/work"}, docker)
