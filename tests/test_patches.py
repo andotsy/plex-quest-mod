@@ -16,7 +16,7 @@ from hermes_dec.parsers.hbc_bytecode_parser import parse_hbc_bytecode
 from hermes_dec.parsers.hbc_file_parser import HBCReader
 
 from plex_quest.build import download, package_apks, require_native_libraries, sign, verify_standalone
-from plex_quest.hermes import UnsupportedBundle, bundle_profile, patch_bundle
+from plex_quest.hermes import UnsupportedBundle, bundle_profile, compatible_horizon_layout, patch_bundle
 from plex_quest.profiles import PLAY_2026_17, HORIZON_2026_18
 from plex_quest.smali import TEMPLATE, get_method, inject_navigation_handler, patch_activity, patch_application, patch_application_id, patch_key_mapping, patch_seek_event
 
@@ -634,6 +634,25 @@ class HermesIntegrationTests(unittest.TestCase):
 class HorizonHermesIntegrationTests(HermesIntegrationTests):
     apk_env = "PLEX_TEST_META_APK"
     profile = HORIZON_2026_18
+
+    def test_probe_finds_relocated_code_and_rejects_a_changed_instruction(self):
+        with ZipFile(os.environ[self.apk_env]) as archive:
+            bundle = archive.read("assets/index.android.bundle")
+        reader = HBCReader()
+        reader.read_whole_file(BytesIO(bundle))
+        number, offset, size = self.profile.functions["vizbee_selector"]
+        header = reader.function_headers[number]
+        relocated = bundle[offset:offset + size]
+        # Move one real function without changing its instruction bytes.
+        header.offset = len(bundle)
+        reader.file_buffer = BytesIO(bundle + relocated)
+        self.assertEqual(compatible_horizon_layout(reader).functions["vizbee_selector"],
+                         (number, len(bundle), size))
+        changed = bytearray(relocated)
+        changed[0xBA] = 12
+        reader.file_buffer = BytesIO(bundle + changed)
+        with self.assertRaisesRegex(UnsupportedBundle, "vizbee_selector has 0 matching"):
+            compatible_horizon_layout(reader)
 
     def test_unknown_receiver_selection_is_rejected(self):
         with ZipFile(os.environ[self.apk_env]) as archive:

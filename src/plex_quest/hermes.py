@@ -99,8 +99,10 @@ def bundle_profile(original: bytes) -> BuildProfile:
     return identify_bundle(_read_bundle(original))
 
 
-def build_bundle_profile(original: bytes) -> BuildProfile:
+def build_bundle_profile(original: bytes, *, require_horizon_fingerprint: bool = False) -> BuildProfile:
     reader = _read_bundle(original)
+    if require_horizon_fingerprint:
+        return compatible_horizon_layout(reader)
     try:
         return identify_bundle(reader)
     except UnsupportedBundle:

@@ -13,7 +13,7 @@ from urllib.request import Request, urlopen
 from zipfile import BadZipFile, ZipFile
 
 from . import ORIGINAL_PACKAGE, QUEST_PACKAGE, VERSION
-from .hermes import _read_bundle, build_bundle_profile, compatible_horizon_layout, patch_bundle
+from .hermes import build_bundle_profile, patch_bundle
 from .profiles import HORIZON_2026_18, BuildProfile
 from .smali import patch_smali
 
@@ -101,9 +101,11 @@ def package_apks(source: Path, directory: Path) -> tuple[Path, list[Path]]:
 
 def java_jar(jar: Path, arguments: list[str], mounts: dict[Path, str] | None = None,
              docker: bool = False, source: Path | None = None) -> None:
+    environment = os.environ.copy()
+    environment.pop("META_ACCESS_TOKEN", None)
     if not docker:
         invocation = ["-cp", str(jar), str(source)] if source else ["-jar", str(jar)]
-        subprocess.run(["java", *invocation, *arguments], check=True)
+        subprocess.run(["java", *invocation, *arguments], check=True, env=environment)
         return
     mounts = mounts or {}
     mapping = {jar.resolve(): "/tool.jar", **{path.resolve(): value for path, value in mounts.items()}}
@@ -123,7 +125,7 @@ def java_jar(jar: Path, arguments: list[str], mounts: dict[Path, str] | None = N
     invocation = ["-cp", "/tool.jar", "/RenamePackage.java"] if source else ["-jar", "/tool.jar"]
     image = "eclipse-temurin:21-jdk-alpine" if source else "eclipse-temurin:21-jre"
     command += [image, "java", *invocation, *translated]
-    subprocess.run(command, check=True)
+    subprocess.run(command, check=True, env=environment)
 
 
 def require_native_libraries(apks: list[Path]) -> None:
@@ -151,7 +153,8 @@ def prepare_patches(base: Path, work: Path, apktool: Path, docker: bool) -> tupl
             preserved = {name: archive.read(name) for name in ("AndroidManifest.xml", "resources.arsc")}
         layout = build_bundle_profile(original_bundle)
         bundle = patch_bundle(original_bundle, profile=layout)
-    except (ValueError, KeyError, IndexError, OverflowError, AssertionError, BadZipFile, struct.error) as error:
+    except (ValueError, KeyError, IndexError, OverflowError, AssertionError, NotImplementedError,
+            BadZipFile, struct.error) as error:
         raise UnsupportedAPK(f"Hermes/APK check failed: {error}") from error
     tree = work / "decoded"
     java_jar(apktool, ["d", "-r", str(base), "-o", str(tree)], {work: "/work"}, docker)
@@ -160,8 +163,8 @@ def prepare_patches(base: Path, work: Path, apktool: Path, docker: bool) -> tupl
         if profile.version_code != layout.version_code and layout == HORIZON_2026_18:
             # A new version may retain even the old function IDs and offsets.
             # Require the stronger fingerprint check for that version too.
-            compatible_horizon_layout(_read_bundle(original_bundle))
-    except (ValueError, IndexError, KeyError) as error:
+            build_bundle_profile(original_bundle, require_horizon_fingerprint=True)
+    except (ValueError, IndexError, KeyError, NotImplementedError) as error:
         raise UnsupportedAPK(f"Native/layout check failed: {error}") from error
     return profile, bundle, preserved
 
@@ -169,7 +172,10 @@ def prepare_patches(base: Path, work: Path, apktool: Path, docker: bool) -> tupl
 def probe_horizon_apk(source: Path, apktool: Path, docker: bool = False) -> BuildProfile:
     """Check a complete Meta APK without assembling, repackaging, or signing it."""
     with tempfile.TemporaryDirectory(prefix="meta-probe-") as temporary:
-        profile, _, _ = prepare_patches(source.resolve(), Path(temporary), apktool, docker)
+        try:
+            profile, _, _ = prepare_patches(source.resolve(), Path(temporary), apktool, docker)
+        except subprocess.CalledProcessError as error:
+            raise UnsupportedAPK(f"Apktool could not decode the candidate (exit {error.returncode}).") from error
     if profile.flavor != "horizon":
         raise UnsupportedAPK("Expected a Plex Horizon APK.")
     return profile
